@@ -6,8 +6,8 @@ Read this file at the start of every new chat to understand the workspace setup.
 
 ## Workspace overview
 
-This is a multi-model agentic development pipeline running on WSL2 (Ubuntu) on Windows.
-The pipeline combines three AI models to write, review, and fix code automatically.
+This is a multi-model agentic development pipeline that runs on any Unix-based system
+(Linux, macOS, or WSL2 on Windows). It combines three AI models to write, review, and fix code automatically.
 
 | Stage | Model | Role |
 |-------|-------|------|
