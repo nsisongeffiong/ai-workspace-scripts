@@ -78,7 +78,9 @@ if [[ -z "$PROJECT_NAME" ]]; then
     4) LANG="generic" ;;
     *) LANG="python" ;;
   esac
+fi
 
+if [[ -z "$BRAND_SRC" ]]; then
   echo ""
   echo -e "  Brand context (optional):"
   echo -e "    ${CYAN}1${RESET}) None  (default)"
