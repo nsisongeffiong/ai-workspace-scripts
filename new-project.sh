@@ -40,7 +40,7 @@ if [[ ! -d "$SHARED_DIR" ]]; then
 fi
 
 PROJECT_NAME=""
-LANG="python"
+LANG=""
 BRAND_SRC=""
 
 while [[ $# -gt 0 ]]; do
@@ -65,6 +65,9 @@ if [[ -z "$PROJECT_NAME" ]]; then
   while [[ -z "$PROJECT_NAME" ]]; do
     read -rp "$(echo -e "${YELLOW}[INPUT]${RESET} Name cannot be empty: ")" PROJECT_NAME
   done
+fi
+
+if [[ -z "$LANG" ]]; then
   echo ""
   echo -e "  Primary language:"
   echo -e "    ${CYAN}1${RESET}) Python  (default)"
@@ -136,19 +139,36 @@ success "Git repository initialised (branch: main)"
 cat > .gitignore << 'GITIGNORE'
 # Secrets
 .env
-*.key *.pem *.p12 *.pfx
+*.key
+*.pem
+*.p12
+*.pfx
 
 # Python
-__pycache__/ *.pyc .pytest_cache/ .mypy_cache/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
 
 # Node
-node_modules/ .npm/ .next/ dist/
+node_modules/
+.npm/
+
+# Next.js
+.next/
+out/
+dist/
+build/
 
 # OS / IDE
-.DS_Store Thumbs.db .idea/ .vscode/settings.json
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/settings.json
 
 # Pipeline
-reviews/*.tmp .model_cache/
+reviews/*.tmp
+.model_cache/
 GITIGNORE
 
 cat > .gitattributes << 'GITATTR'
@@ -195,7 +215,7 @@ if brand_dir.exists() and not any(brand_dir.iterdir()):
 
 task = " ".join(sys.argv[1:])
 env  = {**os.environ, "PROJECT_ROOT": str(PROJECT_ROOT)}
-result = subprocess.run([str(VENV_PYTHON), str(ORCHESTRATOR), task], env=env, cwd=str(PROJECT_ROOT))
+result = subprocess.run([str(VENV_PYTHON), str(ORCHESTRATOR)] + sys.argv[1:], env=env, cwd=str(PROJECT_ROOT))
 sys.exit(result.returncode)
 PYEOF
 chmod +x scripts/run.py
