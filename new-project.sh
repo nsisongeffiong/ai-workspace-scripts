@@ -182,6 +182,17 @@ if len(sys.argv) < 2:
     print(f'Usage: python {Path(__file__).name} "task description"')
     sys.exit(1)
 
+# ── Initialise brand submodule if present but empty ──
+brand_dir = PROJECT_ROOT / "brand"
+if brand_dir.exists() and not any(brand_dir.iterdir()):
+    print("[INFO]  Initialising brand submodule...")
+    result = subprocess.run(
+        ["git", "submodule", "update", "--init", "--recursive"],
+        cwd=str(PROJECT_ROOT)
+    )
+    if result.returncode != 0:
+        print("[WARN]  Brand submodule init failed -- pipeline will continue without brand assets")
+
 task = " ".join(sys.argv[1:])
 env  = {**os.environ, "PROJECT_ROOT": str(PROJECT_ROOT)}
 result = subprocess.run([str(VENV_PYTHON), str(ORCHESTRATOR), task], env=env, cwd=str(PROJECT_ROOT))
@@ -322,25 +333,42 @@ if [[ -n "$BRAND_SRC" ]]; then
 
   case "$BRAND_SRC" in
     git@*|*github.com/*.git|*gitlab.com/*.git|*bitbucket.org/*.git)
-      info "Cloning brand repo..."
-      BRAND_CLONE="$PROJECT_DIR/.model_cache/brand-clone"
-      git clone "$BRAND_SRC" "$BRAND_CLONE" --depth 1 -q 2>/dev/null
-      if [[ ! -d "$BRAND_CLONE" ]]; then
-        error "Failed to clone brand repo: $BRAND_SRC"; exit 1
+      info "Adding brand repo as git submodule..."
+      git submodule add -q "$BRAND_SRC" brand 2>/dev/null
+      if [[ ! -d "$PROJECT_DIR/brand" ]]; then
+        error "Failed to add brand submodule: $BRAND_SRC"; exit 1
       fi
-      if [[ -f "$BRAND_CLONE/prompts/BRAND.md" ]]; then
-        cp "$BRAND_CLONE/prompts/BRAND.md" "$BRAND_DEST"
-        success "Brand context copied from prompts/BRAND.md"
+      if [[ -f "$PROJECT_DIR/brand/prompts/BRAND.md" ]]; then
+        cp "$PROJECT_DIR/brand/prompts/BRAND.md" "$BRAND_DEST"
+        success "Brand submodule added at brand/"
+        success "Brand context copied from brand/prompts/BRAND.md"
       else
-        warn "prompts/BRAND.md not found in repo"
+        warn "brand/prompts/BRAND.md not found in repo"
         read -rp "$(echo -e "${YELLOW}[INPUT]${RESET} Path to brand file within repo: ")" BRAND_REL
-        if [[ -f "$BRAND_CLONE/$BRAND_REL" ]]; then
-          cp "$BRAND_CLONE/$BRAND_REL" "$BRAND_DEST"
+        if [[ -f "$PROJECT_DIR/brand/$BRAND_REL" ]]; then
+          cp "$PROJECT_DIR/brand/$BRAND_REL" "$BRAND_DEST"
           success "Brand context copied from $BRAND_REL"
         else
           error "File not found in repo: $BRAND_REL"; exit 1
         fi
       fi
+      # Append submodule clone note to README
+      cat >> "$PROJECT_DIR/README.md" << SUBMODEOF
+
+## Brand assets
+
+Brand context is linked as a git submodule at \`brand/\`.
+
+When cloning this project, use:
+\`\`\`bash
+git clone --recurse-submodules <repo-url>
+\`\`\`
+
+To update brand assets to the latest version:
+\`\`\`bash
+git submodule update --remote brand
+\`\`\`
+SUBMODEOF
       ;;
     http://*|https://*)
       info "Downloading brand context..."
@@ -361,6 +389,46 @@ if [[ -n "$BRAND_SRC" ]]; then
   esac
 
   # ── Prepend {brand_context} placeholder to local stage prompt overrides ──
+  # For git repo sources, also append asset paths so the AI knows where files live
+  case "$BRAND_SRC" in
+    git@*|*github.com/*.git|*gitlab.com/*.git|*bitbucket.org/*.git)
+      ASSET_PATHS="## Brand asset paths (available in this project)
+
+The following brand assets are available at these exact paths. Always use them
+rather than generating placeholder images or referencing external URLs.
+
+Logo SVGs:
+  brand/logo/ninemi-logo-horizontal.svg       -- primary lockup, dark bg
+  brand/logo/ninemi-logo-horizontal-light.svg -- primary lockup, light bg
+  brand/logo/ninemi-logo-stacked.svg          -- stacked lockup, dark bg
+  brand/logo/ninemi-icon.svg                  -- icon mark with tile
+  brand/logo/ninemi-icon-bare.svg             -- icon mark, transparent bg
+  brand/logo/ninemi-wordmark.svg              -- wordmark, dark bg
+  brand/logo/ninemi-wordmark-light.svg        -- wordmark, light bg
+  brand/logo/favicon.svg                      -- 16px optimised favicon
+
+Fonts (TTF):
+  brand/fonts/Sora-Regular.ttf · Sora-SemiBold.ttf · Sora-Bold.ttf
+  brand/fonts/NunitoSans-Regular.ttf · NunitoSans-SemiBold.ttf · NunitoSans-Bold.ttf
+  brand/fonts/JetBrainsMono-Regular.ttf · JetBrainsMono-Bold.ttf
+
+Design tokens:
+  brand/tokens/tokens.css   -- CSS custom properties (import once at root)
+  brand/tokens/tokens.ts    -- TypeScript exports + Tailwind config helper
+  brand/tokens/tokens.py    -- Python dict + get_css_vars() for HTML/Jinja
+  brand/tokens/palette.json -- W3C design tokens (Figma, Style Dictionary)
+
+Asset placement rules:
+  Node.js / Next.js: copy logo SVGs to public/brand/logo/, fonts to public/brand/fonts/,
+                     import tokens.css in root layout, extend tailwind.config with tokens.ts
+  Python:            use tokens.py for HTML/Jinja template generation,
+                     reference logo SVGs as static assets at /static/brand/logo/"
+      ;;
+    *)
+      ASSET_PATHS=""
+      ;;
+  esac
+
   for prompt in claude_coder gpt_reviewer gemini_validator claude_final; do
     SHARED_PROMPT="$HOME/ai-workspace/.shared/prompts/${prompt}.md"
     LOCAL_PROMPT="$PROJECT_DIR/prompts/${prompt}.md"
@@ -369,10 +437,12 @@ if [[ -n "$BRAND_SRC" ]]; then
 {brand_context}
 
 $(cat "$SHARED_PROMPT")
+${ASSET_PATHS}
 PROMPTEOF
     fi
   done
   success "Stage prompts written with {brand_context} placeholder"
+  [[ -n "$ASSET_PATHS" ]] && success "Asset paths appended to stage prompts"
   info "Brand file: $BRAND_DEST"
 fi
 
