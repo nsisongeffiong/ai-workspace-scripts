@@ -63,26 +63,56 @@ gemini_client = google_genai.Client(api_key=_require_env("GOOGLE_API_KEY"))
 
 
 def load_prompt(name: str) -> str:
-    """Load from project-local override first, then shared default."""
+    """Load prompt, injecting brand context only if the placeholder is present.
+
+    Prompts opt in to brand context by including {brand_context} in their text.
+    This keeps token usage proportional to what each stage actually needs.
+    """
     for search in [PROJECT_ROOT / "prompts", SHARED_DIR / "prompts"]:
         p = search / f"{name}.md"
         if p.exists():
-            return p.read_text(encoding="utf-8")
+            text = p.read_text(encoding="utf-8")
+            if "{brand_context}" in text:
+                brand_path = PROJECT_ROOT / "prompts" / "BRAND.md"
+                brand = brand_path.read_text(encoding="utf-8") if brand_path.exists() else ""
+                text = text.replace("{brand_context}", brand)
+            return text
     raise FileNotFoundError(f"Prompt '{name}.md' not found")
 
 
 def read_src() -> str:
-    """Concatenate all files under src/ for review stages."""
-    root = PROJECT_ROOT / "src"
-    if not root.exists():
-        return "(no src/ directory)"
-    files = sorted(f for f in root.rglob("*") if f.is_file())
-    if not files:
-        return "(src/ is empty)"
+    """Concatenate all project source and config files for review stages.
+
+    Reads root-level config files that affect compilation and runtime,
+    plus all files under src/, giving reviewers full project context.
+    """
+    # Only root files that directly affect how the project compiles and runs
+    ROOT_INCLUDE = {
+        "package.json", "tsconfig.json", "tsconfig.node.json",
+        "next.config.ts", "next.config.js", "next.config.mjs",
+        "postcss.config.mjs", "postcss.config.js",
+        "tailwind.config.ts", "tailwind.config.js",
+        "vite.config.ts", "vite.config.js",
+        "go.mod", "pyproject.toml",
+    }
+
+    root_files = sorted(
+        f for f in PROJECT_ROOT.iterdir()
+        if f.is_file() and f.name in ROOT_INCLUDE
+    )
+
+    src_root = PROJECT_ROOT / "src"
+    src_files = sorted(f for f in src_root.rglob("*") if f.is_file()) \
+                if src_root.exists() else []
+
+    all_files = root_files + src_files
+    if not all_files:
+        return "(no source files found)"
+
     return "\n\n".join(
         f"### {f.relative_to(PROJECT_ROOT)}\n"
         f"```\n{f.read_text(encoding='utf-8', errors='replace')}\n```"
-        for f in files
+        for f in all_files
     )
 
 
