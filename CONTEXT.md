@@ -88,7 +88,6 @@ bash ~/new-project.sh my-project-name
 - All scripts must use \`set -euo pipefail\`
 - Build failure must exit before git commit
 - Always use \`git push origin HEAD\` not bare \`git push\`
-- Add \`node_modules\` guard before npm build: \`if [[ ! -d node_modules ]]; then npm install; fi\`
 - Add idempotency guards so scripts are safe to run twice
 - Restore files from git on build failure: \`git checkout HEAD -- <file>\`
 - For large commands (>3KB) always create a .sh script file -- never paste directly into terminal
