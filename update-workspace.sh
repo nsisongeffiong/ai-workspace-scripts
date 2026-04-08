@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 #  Apply workspace improvements to an existing installation
+#  Downloads latest scripts and prompts directly from the repo.
 #  Run: bash ~/update-workspace.sh
 # =============================================================================
 
@@ -11,6 +12,7 @@ ok()   { echo -e "${GREEN}[OK]${RESET}    $*"; }
 info() { echo -e "${CYAN}[INFO]${RESET}  $*"; }
 warn() { echo -e "${YELLOW}[WARN]${RESET}  $*"; }
 
+REPO="https://raw.githubusercontent.com/nsisongeffiong/ai-workspace-scripts/main"
 SHARED="$HOME/ai-workspace/.shared"
 PROMPTS="$SHARED/prompts"
 
@@ -23,13 +25,26 @@ if [[ ! -d "$SHARED" ]]; then
   exit 1
 fi
 
-# ── Back up existing prompts ──────────────────────────────────────────────────
+# ── Update orchestrate.py ─────────────────────────────────────────────────────
+info "Updating orchestrate.py..."
+curl -fsSL "$REPO/orchestrate.py" -o "$SHARED/orchestrate.py" \
+  || { warn "Failed to download orchestrate.py -- skipping"; }
+chmod +x "$SHARED/orchestrate.py"
+ok "orchestrate.py updated"
+
+# ── Update new-project.sh ─────────────────────────────────────────────────────
+info "Updating new-project.sh..."
+curl -fsSL "$REPO/new-project.sh" -o "$HOME/new-project.sh" \
+  || { warn "Failed to download new-project.sh -- skipping"; }
+chmod +x "$HOME/new-project.sh"
+ok "new-project.sh updated"
+
+# ── Back up and update shared prompts ─────────────────────────────────────────
 info "Backing up existing prompts..."
-cp "$PROMPTS/claude_coder.md" "$PROMPTS/claude_coder.md.bak" 2>/dev/null || true
-cp "$PROMPTS/claude_final.md" "$PROMPTS/claude_final.md.bak" 2>/dev/null || true
+cp "$PROMPTS/claude_coder.md"  "$PROMPTS/claude_coder.md.bak"  2>/dev/null || true
+cp "$PROMPTS/claude_final.md"  "$PROMPTS/claude_final.md.bak"  2>/dev/null || true
 ok "Backups saved as .bak files"
 
-# ── Update claude_coder.md ────────────────────────────────────────────────────
 info "Updating claude_coder.md..."
 cat > "$PROMPTS/claude_coder.md" << 'PROMPT'
 You are a senior software engineer writing production-quality code.
@@ -45,7 +60,9 @@ RESPONSIBILITIES:
   ```ts src/lib/supabase.ts
 
 OUTPUT RULES -- CRITICAL:
-- Every file block MUST have its filepath on the opening fence line
+- Every file block MUST have its full path from the project root on the opening fence line
+- Root-level config files (package.json, tsconfig.json, next.config.ts etc.) must use their
+  bare filename with no directory prefix e.g. ```json package.json
 - Split large tasks into multiple focused files rather than one huge file
 - If approaching the token limit, complete the current file cleanly and stop
 - Do NOT rewrite or modify any files not explicitly listed in the task
@@ -69,7 +86,6 @@ NEXT.JS / SUPABASE RULES:
 PROMPT
 ok "claude_coder.md updated"
 
-# ── Update claude_final.md ────────────────────────────────────────────────────
 info "Updating claude_final.md..."
 cat > "$PROMPTS/claude_final.md" << 'PROMPT'
 You are the lead engineer performing a final synthesis review before merge.
@@ -89,44 +105,21 @@ Priority: Security > Correctness > Performance > Style
 Output: modified code files (if any) + final-review.md
 
 OUTPUT RULES -- CRITICAL:
-- Every corrected file MUST have its filepath on the opening fence line
-- Example: ```tsx src/components/Hero.tsx
+- Every corrected file MUST have its full path from the project root on the opening fence line
+- Root-level config files use bare filename e.g. ```json package.json
 - Do NOT rewrite files that have no accepted changes
 - Do NOT rename or restructure files not listed in the task
 PROMPT
 ok "claude_final.md updated"
 
-# ── Update new-project.sh ─────────────────────────────────────────────────────
-info "Updating new-project.sh..."
-if [[ -d "/mnt/c/Users" ]]; then
-  WIN_USER=$(cmd.exe /c "echo %USERNAME%" 2>/dev/null | tr -d '\r' || whoami)
-  DOWNLOADS="/mnt/c/Users/$WIN_USER/OneDrive/Downloads"
-  [[ -d "$DOWNLOADS" ]] || DOWNLOADS="/mnt/c/Users/$WIN_USER/Downloads"
-else
-  DOWNLOADS="$HOME/Downloads"
-fi
-if [[ -f "$DOWNLOADS/new-project.sh" ]]; then
-  cp "$DOWNLOADS/new-project.sh" "$HOME/new-project.sh"
-  chmod +x "$HOME/new-project.sh"
-  ok "new-project.sh updated from Downloads"
-else
-  warn "new-project.sh not found in Downloads -- skipping"
-  warn "Download it from Claude and place in $DOWNLOADS then re-run"
-fi
-
-# ── Update setup-workspace.sh ─────────────────────────────────────────────────
-info "Updating setup-workspace.sh..."
-if [[ -f "$DOWNLOADS/setup-workspace.sh" ]]; then
-  cp "$DOWNLOADS/setup-workspace.sh" "$HOME/setup-workspace.sh"
-  chmod +x "$HOME/setup-workspace.sh"
-  ok "setup-workspace.sh updated from Downloads"
-else
-  warn "setup-workspace.sh not found in Downloads -- skipping"
-fi
-
 # ── Verify ────────────────────────────────────────────────────────────────────
 echo ""
 info "Verifying improvements..."
+
+echo ""
+echo "orchestrate.py -- key functions present:"
+grep -c "extract_code_blocks\|install_dependencies\|from_stage" "$SHARED/orchestrate.py" | \
+  xargs -I{} echo "  {} of 3 checks found"
 
 echo ""
 echo "claude_coder.md -- key rules present:"
@@ -135,13 +128,13 @@ grep -c "OUTPUT RULES\|NEXT.JS\|createServerClient" "$PROMPTS/claude_coder.md" |
 
 echo ""
 echo "claude_final.md -- key rules present:"
-grep -c "OUTPUT RULES\|filepath" "$PROMPTS/claude_final.md" | \
-  xargs -I{} echo "  {} of 2 checks found"
+grep -c "OUTPUT RULES\|filepath\|full path" "$PROMPTS/claude_final.md" | \
+  xargs -I{} echo "  {} of 3 checks found"
 
 echo ""
-echo "new-project.sh -- improvements present:"
-grep -c "postcss\|node_modules\|large pipeline" "$HOME/new-project.sh" 2>/dev/null | \
-  xargs -I{} echo "  {} of 3 checks found" || echo "  (file not updated)"
+echo "new-project.sh -- key features present:"
+grep -c "\-\-brand\|\-\-lang\|submodule" "$HOME/new-project.sh" 2>/dev/null | \
+  xargs -I{} echo "  {} of 3 checks found" || echo "  (file not found)"
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
@@ -151,12 +144,12 @@ echo "  |  WORKSPACE IMPROVEMENTS APPLIED                             |"
 echo "  +==============================================================+"
 echo -e "${RESET}"
 echo "  What changed:"
-echo "    claude_coder.md  -- filepath on fence lines, no file rewrites,"
-echo "                        Next.js/Supabase client rules"
-echo "    claude_final.md  -- filepath on fence lines, no unnecessary rewrites"
-echo "    new-project.sh   -- postcss.config.js scaffold, node_modules git fix,"
-echo "                        large command tip"
-echo "    setup-workspace.sh -- same prompt improvements baked in for new machines"
+echo "    orchestrate.py   -- downloaded from repo (trusted AI paths,"
+echo "                        auto npm/pip install, --from-stage support)"
+echo "    new-project.sh   -- downloaded from repo (--brand flag, language"
+echo "                        prompt always shown, clean .gitignore)"
+echo "    claude_coder.md  -- filepath rules updated for root-level config files"
+echo "    claude_final.md  -- filepath rules updated for root-level config files"
 echo ""
 echo "  Backed up originals:"
 echo "    $PROMPTS/claude_coder.md.bak"
