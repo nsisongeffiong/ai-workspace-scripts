@@ -250,7 +250,8 @@ ENVEOF
     ;;
 
   generic)
-    cat > src/.gitkeep << ''
+    cat > src/.gitkeep << 'GITKEEP'
+GITKEEP
     cat > .env << 'ENVEOF'
 # Project-local .env -- overrides shared .env
 ENVEOF
