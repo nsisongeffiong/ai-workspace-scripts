@@ -98,7 +98,13 @@ ok "claude_final.md updated"
 
 # ── Update new-project.sh ─────────────────────────────────────────────────────
 info "Updating new-project.sh..."
-DOWNLOADS="/mnt/c/Users/nsisong/OneDrive/Downloads"
+if [[ -d "/mnt/c/Users" ]]; then
+  WIN_USER=$(cmd.exe /c "echo %USERNAME%" 2>/dev/null | tr -d '\r' || whoami)
+  DOWNLOADS="/mnt/c/Users/$WIN_USER/OneDrive/Downloads"
+  [[ -d "$DOWNLOADS" ]] || DOWNLOADS="/mnt/c/Users/$WIN_USER/Downloads"
+else
+  DOWNLOADS="$HOME/Downloads"
+fi
 if [[ -f "$DOWNLOADS/new-project.sh" ]]; then
   cp "$DOWNLOADS/new-project.sh" "$HOME/new-project.sh"
   chmod +x "$HOME/new-project.sh"
