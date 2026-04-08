@@ -190,16 +190,22 @@ import sys, os, subprocess
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
-SHARED_DIR   = Path.home() / "ai-workspace" / ".shared"
+
+# Derive shared dir relative to project location: projects/<name>/scripts/run.py
+# → scripts/ → project/ → projects/ → ai-workspace/ → .shared/
+_derived = PROJECT_ROOT.parent.parent / ".shared"
+SHARED_DIR   = Path(os.getenv("AI_WORKSPACE_SHARED", str(_derived)))
 ORCHESTRATOR = SHARED_DIR / "orchestrate.py"
 VENV_PYTHON  = SHARED_DIR / ".venv" / "bin" / "python3"
 
 if not ORCHESTRATOR.exists():
     print(f"ERROR: Shared orchestrator not found at {ORCHESTRATOR}")
+    print(f"       Set AI_WORKSPACE_SHARED env var if your workspace is in a non-standard location")
     sys.exit(1)
 
 if len(sys.argv) < 2:
     print(f'Usage: python {Path(__file__).name} "task description"')
+    print(f'       python {Path(__file__).name} --from-stage 3 "task description"')
     sys.exit(1)
 
 # ── Initialise brand submodule if present but empty ──
@@ -213,8 +219,7 @@ if brand_dir.exists() and not any(brand_dir.iterdir()):
     if result.returncode != 0:
         print("[WARN]  Brand submodule init failed -- pipeline will continue without brand assets")
 
-task = " ".join(sys.argv[1:])
-env  = {**os.environ, "PROJECT_ROOT": str(PROJECT_ROOT)}
+env = {**os.environ, "PROJECT_ROOT": str(PROJECT_ROOT)}
 result = subprocess.run([str(VENV_PYTHON), str(ORCHESTRATOR)] + sys.argv[1:], env=env, cwd=str(PROJECT_ROOT))
 sys.exit(result.returncode)
 PYEOF
@@ -394,46 +399,6 @@ SUBMODEOF
   esac
 
   # ── Prepend {brand_context} placeholder to local stage prompt overrides ──
-  # For git repo sources, also append asset paths so the AI knows where files live
-  case "$BRAND_SRC" in
-    git@*|*github.com/*.git|*gitlab.com/*.git|*bitbucket.org/*.git)
-      ASSET_PATHS="## Brand asset paths (available in this project)
-
-The following brand assets are available at these exact paths. Always use them
-rather than generating placeholder images or referencing external URLs.
-
-Logo SVGs:
-  brand/logo/ninemi-logo-horizontal.svg       -- primary lockup, dark bg
-  brand/logo/ninemi-logo-horizontal-light.svg -- primary lockup, light bg
-  brand/logo/ninemi-logo-stacked.svg          -- stacked lockup, dark bg
-  brand/logo/ninemi-icon.svg                  -- icon mark with tile
-  brand/logo/ninemi-icon-bare.svg             -- icon mark, transparent bg
-  brand/logo/ninemi-wordmark.svg              -- wordmark, dark bg
-  brand/logo/ninemi-wordmark-light.svg        -- wordmark, light bg
-  brand/logo/favicon.svg                      -- 16px optimised favicon
-
-Fonts (TTF):
-  brand/fonts/Sora-Regular.ttf · Sora-SemiBold.ttf · Sora-Bold.ttf
-  brand/fonts/NunitoSans-Regular.ttf · NunitoSans-SemiBold.ttf · NunitoSans-Bold.ttf
-  brand/fonts/JetBrainsMono-Regular.ttf · JetBrainsMono-Bold.ttf
-
-Design tokens:
-  brand/tokens/tokens.css   -- CSS custom properties (import once at root)
-  brand/tokens/tokens.ts    -- TypeScript exports + Tailwind config helper
-  brand/tokens/tokens.py    -- Python dict + get_css_vars() for HTML/Jinja
-  brand/tokens/palette.json -- W3C design tokens (Figma, Style Dictionary)
-
-Asset placement rules:
-  Node.js / Next.js: copy logo SVGs to public/brand/logo/, fonts to public/brand/fonts/,
-                     import tokens.css in root layout, extend tailwind.config with tokens.ts
-  Python:            use tokens.py for HTML/Jinja template generation,
-                     reference logo SVGs as static assets at /static/brand/logo/"
-      ;;
-    *)
-      ASSET_PATHS=""
-      ;;
-  esac
-
   for prompt in claude_coder gpt_reviewer gemini_validator claude_final; do
     SHARED_PROMPT="$HOME/ai-workspace/.shared/prompts/${prompt}.md"
     LOCAL_PROMPT="$PROJECT_DIR/prompts/${prompt}.md"
@@ -442,12 +407,10 @@ Asset placement rules:
 {brand_context}
 
 $(cat "$SHARED_PROMPT")
-${ASSET_PATHS}
 PROMPTEOF
     fi
   done
   success "Stage prompts written with {brand_context} placeholder"
-  [[ -n "$ASSET_PATHS" ]] && success "Asset paths appended to stage prompts"
   info "Brand file: $BRAND_DEST"
 fi
 
