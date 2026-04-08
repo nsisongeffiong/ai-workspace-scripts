@@ -15,6 +15,8 @@ Every task runs through four stages automatically:
 
 Each stage commits to a feature branch. You review the output and merge to main when satisfied.
 
+The pipeline writes all files exactly where the AI specifies, and runs `npm install` or `pip install` automatically after stages that produce a `package.json` or `requirements.txt`.
+
 ---
 
 ## Requirements
@@ -96,6 +98,7 @@ The script will:
 - Create the workspace at `~/ai-workspace/`
 - Set up a shared Python virtual environment
 - Install all pipeline dependencies
+- Download `orchestrate.py` from this repo
 - Run a smoke test to confirm all three APIs are reachable
 
 The script is safe to re-run — completed phases are skipped automatically.
@@ -108,7 +111,27 @@ The script is safe to re-run — completed phases are skipped automatically.
 bash ~/new-project.sh my-project-name
 ```
 
-You will be prompted to choose a language (Python, Node.js, Go, or Generic).
+You will be prompted to choose a language (Python, Node.js, Go, or Generic) and optionally attach a brand context.
+
+**With a brand repo:**
+```bash
+bash ~/new-project.sh my-project --brand git@github.com:org/brand-repo.git
+```
+
+**With a local brand file:**
+```bash
+bash ~/new-project.sh my-project --brand ./mybrand.md
+```
+
+**With a raw URL:**
+```bash
+bash ~/new-project.sh my-project --brand https://raw.githubusercontent.com/org/repo/main/BRAND.md
+```
+
+**Non-interactively:**
+```bash
+bash ~/new-project.sh my-project --lang node --brand git@github.com:org/brand.git
+```
 
 ---
 
@@ -143,6 +166,17 @@ git push
 
 ---
 
+## Resume from a specific stage
+
+If a stage fails (e.g. a provider is temporarily unavailable), resume without re-running earlier stages:
+
+```bash
+python scripts/run.py --from-stage 3 "Your task here"
+python scripts/run.py --from-stage 4 "Your task here"
+```
+
+---
+
 ## Update an existing workspace
 
 When improvements are released, apply them to your existing workspace:
@@ -162,7 +196,7 @@ bash update-workspace.sh
   .shared/
     .env                  <- API keys (gitignored, chmod 600)
     .venv/                <- shared Python virtual environment
-    orchestrate.py        <- pipeline logic
+    orchestrate.py        <- pipeline logic (downloaded from this repo)
     prompts/
       claude_coder.md     <- Stage 1 system prompt
       gpt_reviewer.md     <- Stage 2 system prompt
@@ -171,6 +205,7 @@ bash update-workspace.sh
   projects/
     my-project/           <- your project lives here
       src/                <- source code
+      brand/              <- brand submodule (if --brand was used)
       reviews/            <- AI review outputs
       scripts/run.py      <- pipeline runner
       prompts/            <- optional project-level prompt overrides
@@ -211,6 +246,13 @@ source ~/.bashrc
 
 The task may be too large for a single pipeline run. Split it into smaller focused tasks and run the pipeline once per task.
 
+**A provider returns 503 (temporarily unavailable)**
+
+Resume from the failed stage without re-running earlier ones:
+```bash
+python scripts/run.py --from-stage 3 "Your task here"
+```
+
 **`git push` fails with "no upstream branch"**
 ```bash
 git push --set-upstream origin "$(git branch --show-current)"
@@ -225,6 +267,7 @@ git push --set-upstream origin "$(git branch --show-current)"
 | `setup-workspace.sh` | One-time setup on a new machine |
 | `new-project.sh` | Create a new pipeline project |
 | `update-workspace.sh` | Apply latest improvements to existing workspace |
+| `orchestrate.py` | Pipeline logic — downloaded by setup, kept in sync with this repo |
 
 ---
 
