@@ -2,9 +2,12 @@
 # =============================================================================
 #  Multi-Model Agentic Dev Environment -- NEW PROJECT
 #  Run this for every new project after workspace setup
-#  Usage:  bash ~/new-project.sh <project-name> [--lang python|node|go]
+#  Usage:  bash ~/new-project.sh <project-name> [--lang python|node|go] [--brand <url|path|repo>]
 #          bash ~/new-project.sh my-api-service
 #          bash ~/new-project.sh my-nextjs-app --lang node
+#          bash ~/new-project.sh ninemi-web --lang node --brand git@github.com:org/brand.git
+#          bash ~/new-project.sh my-site --brand ./mybrand.md
+#          bash ~/new-project.sh my-site --brand https://raw.githubusercontent.com/org/repo/main/BRAND.md
 # =============================================================================
 
 set -euo pipefail
@@ -38,12 +41,14 @@ fi
 
 PROJECT_NAME=""
 LANG="python"
+BRAND_SRC=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --lang) LANG="$2"; shift 2 ;;
-    --*)    error "Unknown option: $1"; exit 1 ;;
-    *)      PROJECT_NAME="$1"; shift ;;
+    --lang)  LANG="$2";      shift 2 ;;
+    --brand) BRAND_SRC="$2"; shift 2 ;;
+    --*)     error "Unknown option: $1"; exit 1 ;;
+    *)       PROJECT_NAME="$1"; shift ;;
   esac
 done
 
@@ -73,6 +78,20 @@ if [[ -z "$PROJECT_NAME" ]]; then
     4) LANG="generic" ;;
     *) LANG="python" ;;
   esac
+
+  echo ""
+  echo -e "  Brand context (optional):"
+  echo -e "    ${CYAN}1${RESET}) None  (default)"
+  echo -e "    ${CYAN}2${RESET}) Git repo URL"
+  echo -e "    ${CYAN}3${RESET}) Local file  (MD, HTML, PDF, TXT)"
+  echo -e "    ${CYAN}4${RESET}) Raw URL  (GitHub raw, CDN, etc.)"
+  read -rp "$(echo -e "${YELLOW}[INPUT]${RESET} Choose [1-4, default 1]: ")" brand_choice
+  case "${brand_choice:-1}" in
+    2) read -rp "$(echo -e "${YELLOW}[INPUT]${RESET} Git repo URL: ")"       BRAND_SRC ;;
+    3) read -rp "$(echo -e "${YELLOW}[INPUT]${RESET} Path to brand file: ")" BRAND_SRC ;;
+    4) read -rp "$(echo -e "${YELLOW}[INPUT]${RESET} Raw URL: ")"            BRAND_SRC ;;
+    *) BRAND_SRC="" ;;
+  esac
 fi
 
 PROJECT_NAME=$(echo "$PROJECT_NAME" | tr -cs '[:alnum:]_-' '-' | sed 's/^-//;s/-$//')
@@ -91,6 +110,7 @@ echo ""
 echo -e "${BOLD}Creating project:${RESET}"
 echo -e "  Name:     ${PROJECT_NAME}"
 echo -e "  Language: ${LANG}"
+[[ -n "$BRAND_SRC" ]] && echo -e "  Brand:    ${BRAND_SRC}"
 echo -e "  Location: ${PROJECT_DIR}"
 echo ""
 confirm "Proceed?" || { echo "Cancelled."; exit 0; }
@@ -292,6 +312,67 @@ bash ~/my-stage-task.sh
 \`\`\`
 READMEEOF
 success "README.md written"
+
+# ── Brand context injection ────────────────────────────────────────────────────
+if [[ -n "$BRAND_SRC" ]]; then
+  step "Injecting Brand Context"
+  BRAND_DEST="$PROJECT_DIR/prompts/BRAND.md"
+
+  case "$BRAND_SRC" in
+    git@*|*github.com/*.git|*gitlab.com/*.git|*bitbucket.org/*.git)
+      info "Cloning brand repo..."
+      BRAND_CLONE="$PROJECT_DIR/.model_cache/brand-clone"
+      git clone "$BRAND_SRC" "$BRAND_CLONE" --depth 1 -q 2>/dev/null
+      if [[ ! -d "$BRAND_CLONE" ]]; then
+        error "Failed to clone brand repo: $BRAND_SRC"; exit 1
+      fi
+      if [[ -f "$BRAND_CLONE/prompts/BRAND.md" ]]; then
+        cp "$BRAND_CLONE/prompts/BRAND.md" "$BRAND_DEST"
+        success "Brand context copied from prompts/BRAND.md"
+      else
+        warn "prompts/BRAND.md not found in repo"
+        read -rp "$(echo -e "${YELLOW}[INPUT]${RESET} Path to brand file within repo: ")" BRAND_REL
+        if [[ -f "$BRAND_CLONE/$BRAND_REL" ]]; then
+          cp "$BRAND_CLONE/$BRAND_REL" "$BRAND_DEST"
+          success "Brand context copied from $BRAND_REL"
+        else
+          error "File not found in repo: $BRAND_REL"; exit 1
+        fi
+      fi
+      ;;
+    http://*|https://*)
+      info "Downloading brand context..."
+      curl -fsSL "$BRAND_SRC" -o "$BRAND_DEST" 2>/dev/null
+      if [[ ! -f "$BRAND_DEST" ]]; then
+        error "Failed to download brand context from: $BRAND_SRC"; exit 1
+      fi
+      success "Brand context downloaded"
+      ;;
+    *)
+      if [[ -f "$BRAND_SRC" ]]; then
+        cp "$BRAND_SRC" "$BRAND_DEST"
+        success "Brand context copied from $BRAND_SRC"
+      else
+        error "Brand file not found: $BRAND_SRC"; exit 1
+      fi
+      ;;
+  esac
+
+  # ── Prepend {brand_context} placeholder to local stage prompt overrides ──
+  for prompt in claude_coder gpt_reviewer gemini_validator claude_final; do
+    SHARED_PROMPT="$HOME/ai-workspace/.shared/prompts/${prompt}.md"
+    LOCAL_PROMPT="$PROJECT_DIR/prompts/${prompt}.md"
+    if [[ -f "$SHARED_PROMPT" ]] && [[ ! -f "$LOCAL_PROMPT" ]]; then
+      cat > "$LOCAL_PROMPT" << PROMPTEOF
+{brand_context}
+
+$(cat "$SHARED_PROMPT")
+PROMPTEOF
+    fi
+  done
+  success "Stage prompts written with {brand_context} placeholder"
+  info "Brand file: $BRAND_DEST"
+fi
 
 step "Initial Git Commit"
 git add .
