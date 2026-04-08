@@ -284,6 +284,79 @@ def stage_4_claude_final() -> str:
     return text
 
 
+# -- Pre-pipeline: brand asset placement -------------------------------------
+
+def setup_brand_assets() -> None:
+    """Ask Claude where brand assets should go, then copy them there.
+
+    Only runs when a non-empty brand/ submodule exists.
+    Claude inspects the project structure and returns a JSON placement map,
+    so this works for any language or framework without hardcoded rules.
+    """
+    import json, shutil
+
+    brand_dir = PROJECT_ROOT / "brand"
+    if not brand_dir.exists() or not any(brand_dir.iterdir()):
+        return
+
+    # Build a compact project snapshot for Claude to reason about
+    structure = "\n".join(
+        str(p.relative_to(PROJECT_ROOT))
+        for p in sorted(PROJECT_ROOT.rglob("*"))
+        if p.is_file()
+        and ".git" not in p.parts
+        and "node_modules" not in p.parts
+        and "brand" not in p.parts
+    ) or "(empty project)"
+
+    brand_files = "\n".join(
+        str(p.relative_to(brand_dir))
+        for p in sorted(brand_dir.rglob("*"))
+        if p.is_file() and ".git" not in p.parts
+    )
+
+    prompt = (
+        "You are a build engineer. Given the project structure below, determine "
+        "where brand assets should be copied so the web framework can serve them.\n\n"
+        f"Project files:\n{structure}\n\n"
+        f"Brand asset files (relative to brand/):\n{brand_files}\n\n"
+        "Return ONLY a JSON object mapping each brand asset subdirectory to its "
+        "destination path relative to the project root. Example:\n"
+        '{"logo": "public/brand/logo", "fonts": "public/brand/fonts", "tokens": "public/brand/tokens"}\n\n'
+        "If no static serving directory exists or cannot be determined, return {}.\n"
+        "Return ONLY the JSON object — no explanation, no markdown."
+    )
+
+    log.info("Pre-flight: determining brand asset placement...")
+    try:
+        msg = claude_client.messages.create(
+            model=CLAUDE_MODEL,
+            max_tokens=256,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        placement = json.loads(raw)
+    except Exception as e:
+        log.warning("  Brand placement check failed (%s) -- skipping asset copy", e)
+        return
+
+    if not placement:
+        log.info("  No static serving directory detected -- skipping asset copy")
+        return
+
+    for src_subdir, dest_path in placement.items():
+        src = brand_dir / src_subdir
+        dest = PROJECT_ROOT / dest_path
+        if not src.exists():
+            continue
+        dest.mkdir(parents=True, exist_ok=True)
+        for f in src.iterdir():
+            if f.is_file():
+                shutil.copy2(f, dest / f.name)
+        log.info("  Copied brand/%s -> %s (%d files)", src_subdir, dest_path,
+                 sum(1 for _ in src.iterdir() if _.is_file()))
+
+
 # -- Main pipeline ------------------------------------------------------------
 
 def run(task: str, from_stage: int = 1) -> None:
@@ -307,6 +380,7 @@ def run(task: str, from_stage: int = 1) -> None:
         log.info("Branch:  %s", branch)
 
     if from_stage <= 1:
+        setup_brand_assets()
         stage_1_claude_code(task)
         git_commit(repo, "feat(claude): initial implementation", [PROJECT_ROOT / "src"])
 
