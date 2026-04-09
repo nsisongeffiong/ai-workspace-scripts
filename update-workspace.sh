@@ -143,18 +143,18 @@ echo "    claude_coder.md  -- updated"
 echo "    claude_final.md  -- updated"
 echo ""
 echo "  Verification:"
-printf "    orchestrate.py   -- "
-grep -c "extract_code_blocks\|install_dependencies\|from_stage\|setup_brand_assets" "$SHARED/orchestrate.py" | \
-  xargs -I{} echo "{}/4 checks OK"
-printf "    claude_coder.md  -- "
-grep -c "OUTPUT RULES\|NEXT.JS\|createServerClient" "$PROMPTS/claude_coder.md" | \
-  xargs -I{} echo "{}/3 checks OK"
-printf "    claude_final.md  -- "
-grep -c "OUTPUT RULES\|filepath\|full path" "$PROMPTS/claude_final.md" | \
-  xargs -I{} echo "{}/3 checks OK"
-printf "    new-project.sh   -- "
-grep -c "\-\-brand\|\-\-lang\|submodule" "$HOME/new-project.sh" 2>/dev/null | \
-  xargs -I{} echo "{}/3 checks OK" || echo "file not found"
+_check() {
+  local label="$1" file="$2"; shift 2
+  local total=$# found=0
+  for pattern in "$@"; do
+    grep -q "$pattern" "$file" 2>/dev/null && found=$((found + 1)) || true
+  done
+  printf "    %-18s -- %d/%d checks OK\n" "$label" "$found" "$total"
+}
+_check "orchestrate.py"  "$SHARED/orchestrate.py"  "extract_code_blocks" "install_dependencies" "from_stage" "setup_brand_assets"
+_check "claude_coder.md" "$PROMPTS/claude_coder.md" "OUTPUT RULES" "NEXT.JS" "createServerClient"
+_check "claude_final.md" "$PROMPTS/claude_final.md" "OUTPUT RULES" "full path"
+_check "new-project.sh"  "$HOME/new-project.sh"     "\-\-brand" "\-\-lang" "submodule"
 echo ""
 echo "  Backed up originals:"
 echo "    $PROMPTS/claude_coder.md.bak"
