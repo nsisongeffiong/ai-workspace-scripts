@@ -19,16 +19,23 @@ PROMPTS="$SHARED/prompts"
 echo -e "\n${BOLD}${CYAN}Applying workspace improvements...${RESET}\n"
 
 # ── Self-update ───────────────────────────────────────────────────────────────
-info "Checking for update-workspace.sh updates..."
-SELF="$HOME/update-workspace.sh"
-OLD_SUM=$(md5sum "$SELF" 2>/dev/null | cut -d' ' -f1 || echo "none")
-curl -fsSL "$REPO/update-workspace.sh" -o "$SELF.tmp" \
-  && mv "$SELF.tmp" "$SELF" && chmod +x "$SELF" \
-  || { warn "Self-update failed -- continuing with current version"; rm -f "$SELF.tmp"; }
-NEW_SUM=$(md5sum "$SELF" | cut -d' ' -f1)
-if [[ "$OLD_SUM" != "$NEW_SUM" ]]; then
-  ok "update-workspace.sh updated -- re-running with latest version"
-  exec bash "$SELF"
+# Download latest version from repo and re-exec if changed.
+# UPDATED flag prevents infinite re-exec loop.
+if [[ "${UPDATED:-0}" != "1" ]]; then
+  info "Checking for update-workspace.sh updates..."
+  SELF="$HOME/update-workspace.sh"
+  OLD_SUM=$(md5sum "$SELF" 2>/dev/null | cut -d' ' -f1 || echo "none")
+  if curl -fsSL "$REPO/update-workspace.sh" -o "$SELF.tmp" 2>/dev/null; then
+    mv "$SELF.tmp" "$SELF" && chmod +x "$SELF"
+    NEW_SUM=$(md5sum "$SELF" | cut -d' ' -f1)
+    if [[ "$OLD_SUM" != "$NEW_SUM" ]]; then
+      ok "update-workspace.sh updated -- re-running with latest version"
+      exec env UPDATED=1 bash "$SELF"
+    fi
+  else
+    warn "Self-update failed -- continuing with current version"
+    rm -f "$SELF.tmp"
+  fi
 fi
 
 # ── Validate workspace exists ─────────────────────────────────────────────────
