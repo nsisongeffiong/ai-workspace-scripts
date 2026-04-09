@@ -65,6 +65,7 @@ gemini_client = google_genai.Client(api_key=_require_env("GOOGLE_API_KEY"))
 def load_prompt(name: str) -> str:
     """Load prompt, injecting brand context only if the placeholder is present.
 
+    Prefers BRAND_TOKENS.md (distilled) over BRAND.md (full) when available.
     Prompts opt in to brand context by including {brand_context} in their text.
     This keeps token usage proportional to what each stage actually needs.
     """
@@ -73,12 +74,36 @@ def load_prompt(name: str) -> str:
         if p.exists():
             text = p.read_text(encoding="utf-8")
             if "{brand_context}" in text:
-                brand_path = PROJECT_ROOT / "prompts" / "BRAND.md"
-                brand = brand_path.read_text(encoding="utf-8") if brand_path.exists() else ""
+                # Prefer distilled tokens file -- falls back to full brand guide
+                tokens_path = PROJECT_ROOT / "prompts" / "BRAND_TOKENS.md"
+                brand_path  = PROJECT_ROOT / "prompts" / "BRAND.md"
+                if tokens_path.exists():
+                    brand = tokens_path.read_text(encoding="utf-8")
+                    log.debug("  Brand context: using BRAND_TOKENS.md (%d chars)", len(brand))
+                elif brand_path.exists():
+                    brand = brand_path.read_text(encoding="utf-8")
+                    log.debug("  Brand context: using BRAND.md (%d chars)", len(brand))
+                else:
+                    brand = ""
                 text = text.replace("{brand_context}", brand)
             return text
     raise FileNotFoundError(f"Prompt '{name}.md' not found")
 
+
+def check_brand_budget() -> None:
+    """Warn if brand context is large enough to crowd the token budget."""
+    brand_path = PROJECT_ROOT / "prompts" / "BRAND.md"
+    if not brand_path.exists():
+        return
+    size = len(brand_path.read_text(encoding="utf-8"))
+    tokens_approx = size // 4
+    if tokens_approx > 2000:
+        log.warning(
+            "Brand context is ~%d tokens -- this leaves only ~%d tokens for code output. "
+            "Consider splitting your task into smaller focused pipeline runs, or trimming "
+            "the brand guide to essential design tokens only (colours, fonts, spacing).",
+            tokens_approx, 8192 - tokens_approx
+        )
 
 def read_src() -> str:
     """Concatenate all project source and config files for review stages.
@@ -300,6 +325,72 @@ def stage_4_claude_final() -> str:
     extract_code_blocks(text)
     install_dependencies()
     return text
+
+
+
+def distil_brand_tokens() -> None:
+    """Use Claude to distil BRAND.md into a lean BRAND_TOKENS.md.
+
+    Only runs when BRAND.md exists and BRAND_TOKENS.md does not yet exist.
+    The distilled file contains only the tokens needed for consistent UI output:
+    colours, typography, spacing, logo paths, and a brief brand voice summary.
+    Target: under 100 lines / ~1000 tokens, leaving maximum budget for code.
+    """
+    brand_path  = PROJECT_ROOT / "prompts" / "BRAND.md"
+    tokens_path = PROJECT_ROOT / "prompts" / "BRAND_TOKENS.md"
+
+    if not brand_path.exists():
+        return
+
+    if tokens_path.exists():
+        tokens_size = len(tokens_path.read_text(encoding="utf-8"))
+        log.info("Pre-flight: BRAND_TOKENS.md already exists (%d chars) -- skipping distillation", tokens_size)
+        return
+
+    brand_content = brand_path.read_text(encoding="utf-8")
+    brand_tokens  = len(brand_content) // 4
+    log.info(
+        "Pre-flight: Distilling brand guide (%d chars / ~%d tokens) into BRAND_TOKENS.md...",
+        len(brand_content), brand_tokens
+    )
+
+    prompt = f"""You are a design systems engineer. Extract only the essential design tokens
+from this brand guide into a compact BRAND_TOKENS.md file for use as AI pipeline context.
+
+The output must be under 100 lines and contain ONLY:
+1. Brand name and one-line description
+2. Colour palette -- exact hex values with semantic names (primary, secondary, background, text, accent, etc.)
+3. Typography -- font family names, weights, and size scale
+4. Spacing scale (if defined)
+5. Logo file paths or URLs (exact paths as specified in the brand guide)
+6. Component library or CSS framework name (if specified)
+7. Brand voice -- maximum 3 sentences describing tone and personality
+8. Any critical DO / DO NOT rules (maximum 5 bullet points)
+
+Format as clean markdown with concise sections. No narrative. No explanations.
+Every colour must include its exact hex value. Every font must include its exact name.
+
+BRAND GUIDE:
+{brand_content}
+
+Return ONLY the BRAND_TOKENS.md content -- no preamble, no explanation."""
+
+    try:
+        msg = claude_client.messages.create(
+            model=CLAUDE_MODEL,
+            max_tokens=1500,
+            messages=[{{"role": "user", "content": prompt}}],
+        )
+        tokens_content = msg.content[0].text.strip()
+        tokens_path.write_text(tokens_content, encoding="utf-8")
+        distilled_tokens = len(tokens_content) // 4
+        saved = brand_tokens - distilled_tokens
+        log.info(
+            "Pre-flight: BRAND_TOKENS.md written (%d chars / ~%d tokens) -- saved ~%d tokens vs full brand guide",
+            len(tokens_content), distilled_tokens, saved
+        )
+    except Exception as e:
+        log.warning("Pre-flight: Brand distillation failed (%s) -- will use full BRAND.md", e)
 
 
 # -- Pre-pipeline: brand asset placement -------------------------------------
