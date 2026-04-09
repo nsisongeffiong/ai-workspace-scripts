@@ -18,6 +18,19 @@ PROMPTS="$SHARED/prompts"
 
 echo -e "\n${BOLD}${CYAN}Applying workspace improvements...${RESET}\n"
 
+# ── Self-update ───────────────────────────────────────────────────────────────
+info "Checking for update-workspace.sh updates..."
+SELF="$HOME/update-workspace.sh"
+OLD_SUM=$(md5sum "$SELF" 2>/dev/null | cut -d' ' -f1 || echo "none")
+curl -fsSL "$REPO/update-workspace.sh" -o "$SELF.tmp" \
+  && mv "$SELF.tmp" "$SELF" && chmod +x "$SELF" \
+  || { warn "Self-update failed -- continuing with current version"; rm -f "$SELF.tmp"; }
+NEW_SUM=$(md5sum "$SELF" | cut -d' ' -f1)
+if [[ "$OLD_SUM" != "$NEW_SUM" ]]; then
+  ok "update-workspace.sh updated -- re-running with latest version"
+  exec bash "$SELF"
+fi
+
 # ── Validate workspace exists ─────────────────────────────────────────────────
 if [[ ! -d "$SHARED" ]]; then
   echo "ERROR: Workspace not found at $HOME/ai-workspace"
