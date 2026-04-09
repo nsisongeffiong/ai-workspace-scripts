@@ -83,10 +83,10 @@ def load_prompt(name: str) -> str:
 def read_src() -> str:
     """Concatenate all project source and config files for review stages.
 
-    Reads root-level config files that affect compilation and runtime,
-    plus all files under src/, giving reviewers full project context.
+    Only reads files that were written or modified by the pipeline —
+    determined by diffing against the initial scaffold commit.
+    Falls back to reading all src/ files if git history is unavailable.
     """
-    # Only root files that directly affect how the project compiles and runs
     ROOT_INCLUDE = {
         "package.json", "tsconfig.json", "tsconfig.node.json",
         "next.config.ts", "next.config.js", "next.config.mjs",
@@ -96,19 +96,37 @@ def read_src() -> str:
         "go.mod", "pyproject.toml",
     }
 
+    try:
+        repo = Repo(PROJECT_ROOT)
+        # Get files changed since the initial scaffold commit
+        initial = repo.git.rev_list("--max-parents=0", "HEAD").strip().splitlines()[-1]
+        changed = set(repo.git.diff("--name-only", initial, "HEAD").strip().splitlines())
+        # Include only changed files that exist on disk
+        pipeline_files = sorted(
+            PROJECT_ROOT / f for f in changed
+            if (PROJECT_ROOT / f).is_file()
+            and ".git" not in (PROJECT_ROOT / f).parts
+        )
+        if pipeline_files:
+            return "\n\n".join(
+                f"### {f.relative_to(PROJECT_ROOT)}\n"
+                f"```\n{f.read_text(encoding='utf-8', errors='replace')}\n```"
+                for f in pipeline_files
+            )
+    except Exception:
+        pass
+
+    # Fallback: read root config files + all of src/
     root_files = sorted(
         f for f in PROJECT_ROOT.iterdir()
         if f.is_file() and f.name in ROOT_INCLUDE
     )
-
     src_root = PROJECT_ROOT / "src"
     src_files = sorted(f for f in src_root.rglob("*") if f.is_file()) \
                 if src_root.exists() else []
-
     all_files = root_files + src_files
     if not all_files:
         return "(no source files found)"
-
     return "\n\n".join(
         f"### {f.relative_to(PROJECT_ROOT)}\n"
         f"```\n{f.read_text(encoding='utf-8', errors='replace')}\n```"
