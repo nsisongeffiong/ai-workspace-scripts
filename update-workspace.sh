@@ -27,17 +27,21 @@ fi
 
 # ── Update orchestrate.py ─────────────────────────────────────────────────────
 info "Updating orchestrate.py..."
+OLD_SUM=$(md5sum "$SHARED/orchestrate.py" 2>/dev/null | cut -d' ' -f1 || echo "none")
 curl -fsSL "$REPO/orchestrate.py" -o "$SHARED/orchestrate.py" \
   || { warn "Failed to download orchestrate.py -- skipping"; }
 chmod +x "$SHARED/orchestrate.py"
-ok "orchestrate.py updated"
+NEW_SUM=$(md5sum "$SHARED/orchestrate.py" | cut -d' ' -f1)
+[[ "$OLD_SUM" != "$NEW_SUM" ]] && ORCHESTRATE_STATUS="changed" || ORCHESTRATE_STATUS="already latest"
 
 # ── Update new-project.sh ─────────────────────────────────────────────────────
 info "Updating new-project.sh..."
+OLD_SUM=$(md5sum "$HOME/new-project.sh" 2>/dev/null | cut -d' ' -f1 || echo "none")
 curl -fsSL "$REPO/new-project.sh" -o "$HOME/new-project.sh" \
   || { warn "Failed to download new-project.sh -- skipping"; }
 chmod +x "$HOME/new-project.sh"
-ok "new-project.sh updated"
+NEW_SUM=$(md5sum "$HOME/new-project.sh" | cut -d' ' -f1)
+[[ "$OLD_SUM" != "$NEW_SUM" ]] && NEW_PROJECT_STATUS="changed" || NEW_PROJECT_STATUS="already latest"
 
 # ── Back up and update shared prompts ─────────────────────────────────────────
 info "Backing up existing prompts..."
@@ -112,30 +116,6 @@ OUTPUT RULES -- CRITICAL:
 PROMPT
 ok "claude_final.md updated"
 
-# ── Verify ────────────────────────────────────────────────────────────────────
-echo ""
-info "Verifying improvements..."
-
-echo ""
-echo "orchestrate.py -- key functions present:"
-grep -c "extract_code_blocks\|install_dependencies\|from_stage" "$SHARED/orchestrate.py" | \
-  xargs -I{} echo "  {} of 3 checks found"
-
-echo ""
-echo "claude_coder.md -- key rules present:"
-grep -c "OUTPUT RULES\|NEXT.JS\|createServerClient" "$PROMPTS/claude_coder.md" | \
-  xargs -I{} echo "  {} of 3 checks found"
-
-echo ""
-echo "claude_final.md -- key rules present:"
-grep -c "OUTPUT RULES\|filepath\|full path" "$PROMPTS/claude_final.md" | \
-  xargs -I{} echo "  {} of 3 checks found"
-
-echo ""
-echo "new-project.sh -- key features present:"
-grep -c "\-\-brand\|\-\-lang\|submodule" "$HOME/new-project.sh" 2>/dev/null | \
-  xargs -I{} echo "  {} of 3 checks found" || echo "  (file not found)"
-
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
 echo -e "${GREEN}${BOLD}"
@@ -143,13 +123,25 @@ echo "  +==============================================================+"
 echo "  |  WORKSPACE IMPROVEMENTS APPLIED                             |"
 echo "  +==============================================================+"
 echo -e "${RESET}"
-echo "  What changed:"
-echo "    orchestrate.py   -- downloaded from repo (trusted AI paths,"
-echo "                        auto npm/pip install, --from-stage support)"
-echo "    new-project.sh   -- downloaded from repo (--brand flag, language"
-echo "                        prompt always shown, clean .gitignore)"
-echo "    claude_coder.md  -- filepath rules updated for root-level config files"
-echo "    claude_final.md  -- filepath rules updated for root-level config files"
+echo "  Files updated:"
+echo "    orchestrate.py   -- $ORCHESTRATE_STATUS"
+echo "    new-project.sh   -- $NEW_PROJECT_STATUS"
+echo "    claude_coder.md  -- updated"
+echo "    claude_final.md  -- updated"
+echo ""
+echo "  Verification:"
+printf "    orchestrate.py   -- "
+grep -c "extract_code_blocks\|install_dependencies\|from_stage\|setup_brand_assets" "$SHARED/orchestrate.py" | \
+  xargs -I{} echo "{}/4 checks OK"
+printf "    claude_coder.md  -- "
+grep -c "OUTPUT RULES\|NEXT.JS\|createServerClient" "$PROMPTS/claude_coder.md" | \
+  xargs -I{} echo "{}/3 checks OK"
+printf "    claude_final.md  -- "
+grep -c "OUTPUT RULES\|filepath\|full path" "$PROMPTS/claude_final.md" | \
+  xargs -I{} echo "{}/3 checks OK"
+printf "    new-project.sh   -- "
+grep -c "\-\-brand\|\-\-lang\|submodule" "$HOME/new-project.sh" 2>/dev/null | \
+  xargs -I{} echo "{}/3 checks OK" || echo "file not found"
 echo ""
 echo "  Backed up originals:"
 echo "    $PROMPTS/claude_coder.md.bak"
