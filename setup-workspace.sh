@@ -278,6 +278,16 @@ ENVEXAMPLE
 **/.model_cache/
 GITIGNORE
   success "Workspace .gitignore written"
+
+  # Export API keys into shell environment for terminal agent auth.
+  # Uses lazy eval -- value is read from .env at shell startup, not baked in as a
+  # snapshot. Account-based auth (claude auth / codex auth) takes precedence when
+  # a session exists, so switching between API key and Pro plan auth still works.
+  grep -q 'ANTHROPIC_API_KEY' ~/.bashrc || \
+    echo 'export ANTHROPIC_API_KEY=$(grep ^ANTHROPIC_API_KEY ~/ai-workspace/.shared/.env | cut -d= -f2-)' >> ~/.bashrc
+  grep -q 'OPENAI_API_KEY' ~/.bashrc || \
+    echo 'export OPENAI_API_KEY=$(grep ^OPENAI_API_KEY ~/ai-workspace/.shared/.env | cut -d= -f2-)' >> ~/.bashrc
+  success "API keys added to ~/.bashrc for terminal agent auth"
 }
 
 # =============================================================================

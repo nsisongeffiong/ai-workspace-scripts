@@ -16,7 +16,17 @@ npm install -g @anthropic-ai/claude-code
 ```
 
 **Auth**
-Uses `ANTHROPIC_API_KEY` from your `.env` — already configured if you've run setup.
+Setup exports `ANTHROPIC_API_KEY` from `.env` into your shell environment, so Claude Code works immediately after install. If you run out of API credits, sign out and switch to account-based auth:
+
+```bash
+claude auth login
+```
+
+Your Pro plan session then takes precedence over the env var. Switch back to API key auth at any time by signing out:
+
+```bash
+claude auth logout
+```
 
 **Launch**
 ```bash
@@ -44,7 +54,17 @@ npm install -g @openai/codex
 ```
 
 **Auth**
-Uses `OPENAI_API_KEY` from your `.env` — the same key Stage 2 of the pipeline uses. Alternatively, a ChatGPT Plus, Pro, or Team subscription covers CLI usage.
+Setup exports `OPENAI_API_KEY` from `.env` into your shell environment — the same key Stage 2 of the pipeline uses — so Codex works immediately after install. If you prefer to use a ChatGPT Plus, Pro, or Team subscription instead, sign in via:
+
+```bash
+codex auth
+```
+
+Your account session then takes precedence over the env var. Switch back to API key auth at any time by signing out:
+
+```bash
+codex auth logout
+```
 
 **Launch**
 ```bash

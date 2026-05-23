@@ -221,15 +221,43 @@ fi
 
 # ── Terminal agents ───────────────────────────────────────────────────────────
 info "Checking terminal agents..."
-if command -v claude &>/dev/null; then
-  ok "Claude Code present ($(claude --version 2>/dev/null || echo 'version unknown'))"
-else
-  warn "Claude Code not found -- install with: npm install -g @anthropic-ai/claude-code"
+# Ensure nvm-managed npm is on PATH if not already available
+if ! command -v npm &>/dev/null; then
+  # shellcheck disable=SC1090
+  [ -s "$HOME/.nvm/nvm.sh" ] && source "$HOME/.nvm/nvm.sh" 2>/dev/null || true
 fi
-if command -v codex &>/dev/null; then
-  ok "Codex CLI present ($(codex --version 2>/dev/null || echo 'version unknown'))"
+
+_install_agent() {
+  local name="$1" bin="$2" pkg="$3"
+  if command -v "$bin" &>/dev/null; then
+    ok "$name present ($("$bin" --version 2>/dev/null || echo 'version unknown'))"
+  else
+    info "$name not found -- installing..."
+    if command -v npm &>/dev/null; then
+      if npm install -g "$pkg" --silent; then
+        ok "$name installed"
+      else
+        warn "$name install failed -- install manually: npm install -g $pkg"
+      fi
+    else
+      warn "npm not available -- install $name manually: npm install -g $pkg"
+    fi
+  fi
+}
+
+_install_agent "Claude Code" "claude" "@anthropic-ai/claude-code"
+_install_agent "Codex CLI"   "codex"  "@openai/codex"
+
+# Ensure API keys are exported to shell environment for terminal agent auth.
+# Gated on .env existing -- same guard as the model patching block above.
+if [[ -f "$ENV_FILE" ]]; then
+  grep -q 'ANTHROPIC_API_KEY' ~/.bashrc || \
+    echo 'export ANTHROPIC_API_KEY=$(grep ^ANTHROPIC_API_KEY ~/ai-workspace/.shared/.env | cut -d= -f2-)' >> ~/.bashrc
+  grep -q 'OPENAI_API_KEY' ~/.bashrc || \
+    echo 'export OPENAI_API_KEY=$(grep ^OPENAI_API_KEY ~/ai-workspace/.shared/.env | cut -d= -f2-)' >> ~/.bashrc
+  ok "API keys present in ~/.bashrc for terminal agent auth"
 else
-  warn "Codex CLI not found -- install with: npm install -g @openai/codex"
+  warn "API key export skipped -- .env not found (run setup-workspace.sh first)"
 fi
 
 # ── Summary ───────────────────────────────────────────────────────────────────
