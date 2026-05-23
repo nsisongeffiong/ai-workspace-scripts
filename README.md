@@ -98,6 +98,8 @@ The script will:
 - Create the workspace at `~/ai-workspace/`
 - Set up a shared Python virtual environment
 - Install all pipeline dependencies
+- Install **Claude Code** and **Codex CLI** as terminal agents
+- Export your API keys to `~/.bashrc` so both agents work immediately
 - Download `orchestrate.py` from this repo
 - Run a smoke test to confirm all three APIs are reachable
 
@@ -230,6 +232,19 @@ nano ~/ai-workspace/.shared/.env
 
 ---
 
+## Terminal agents
+
+Setup installs two terminal agents for out-of-band work — fixes, refinements, and exploratory changes that happen outside a full pipeline run.
+
+| Agent | Command | Provider |
+|-------|---------|----------|
+| Claude Code | `claude` | Anthropic |
+| Codex CLI | `codex` | OpenAI |
+
+Both use the API keys already in your `.env`. See [TERMINAL_AGENTS.md](./TERMINAL_AGENTS.md) for auth options, usage examples, and how to switch between API key and account-based auth.
+
+---
+
 ## Troubleshooting
 
 **Smoke test fails for one provider**
@@ -268,6 +283,7 @@ git push --set-upstream origin "$(git branch --show-current)"
 | `new-project.sh` | Create a new pipeline project |
 | `update-workspace.sh` | Apply latest improvements to existing workspace |
 | `orchestrate.py` | Pipeline logic — downloaded by setup, kept in sync with this repo |
+| `TERMINAL_AGENTS.md` | Guide to Claude Code and Codex CLI terminal agents |
 
 ---
 
