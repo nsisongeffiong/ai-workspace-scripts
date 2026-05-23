@@ -12,6 +12,21 @@ All notable changes to ai-workspace-scripts are recorded here.
 
 ---
 
+## [May 2026] — Terminal agents
+
+### Added
+- Claude Code and Codex CLI installed as terminal peers by `setup-workspace.sh` during setup. Both are kept current by `update-workspace.sh` (install-if-missing on each run).
+- `TERMINAL_AGENTS.md` added to repo — covers install, auth options, common usage, and guidance on choosing between agents.
+- API keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) exported to `~/.bashrc` via lazy eval so both agents work immediately after setup. Value is read from `.env` at shell startup, not baked in as a snapshot. Account-based auth (`claude auth` / `codex auth`) takes precedence over env vars when a session exists.
+- README updated with terminal agents section.
+
+### Notes
+- Neither agent is wired into the 4-stage pipeline — both are for out-of-band work only.
+- Codex prompts for signin on first launch regardless of `OPENAI_API_KEY` — one-time onboarding flow, not an auth failure.
+- Claude Code auto-update may fail with `ENOTEMPTY` — fix: `rm -rf ~/.nvm/versions/node/v20.20.2/lib/node_modules/@anthropic-ai/claude-code && npm install -g @anthropic-ai/claude-code`.
+
+---
+
 ## [May 2026] — Maintenance pass + model upgrades
 
 ### Models
