@@ -181,6 +181,14 @@ phase_system_deps() {
   else
     success "Claude Code CLI already present"
   fi
+
+  if ! command -v codex &>/dev/null; then
+    info "Installing Codex CLI..."
+    npm install -g @openai/codex --silent
+    success "Codex CLI installed"
+  else
+    success "Codex CLI already present"
+  fi
 }
 
 # =============================================================================
@@ -626,7 +634,7 @@ PYEOF
 # PHASE 9 -- Smoke test
 # =============================================================================
 phase_smoke_test() {
-  step "PHASE 9 -- API Connectivity Smoke Test"
+  step "PHASE 10 -- API Connectivity Smoke Test"
   # shellcheck disable=SC1090
   source "$SHARED_DIR/.venv/bin/activate"
   echo ""

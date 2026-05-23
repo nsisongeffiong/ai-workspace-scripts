@@ -219,6 +219,19 @@ else
   warn ".env not found at $ENV_FILE -- skipping (run setup-workspace.sh first)"
 fi
 
+# ── Terminal agents ───────────────────────────────────────────────────────────
+info "Checking terminal agents..."
+if command -v claude &>/dev/null; then
+  ok "Claude Code present ($(claude --version 2>/dev/null || echo 'version unknown'))"
+else
+  warn "Claude Code not found -- install with: npm install -g @anthropic-ai/claude-code"
+fi
+if command -v codex &>/dev/null; then
+  ok "Codex CLI present ($(codex --version 2>/dev/null || echo 'version unknown'))"
+else
+  warn "Codex CLI not found -- install with: npm install -g @openai/codex"
+fi
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
 echo -e "${GREEN}${BOLD}"
