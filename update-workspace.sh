@@ -65,8 +65,9 @@ NEW_SUM=$(md5sum "$HOME/new-project.sh" | cut -d' ' -f1)
 
 # ── Back up and update shared prompts ─────────────────────────────────────────
 info "Backing up existing prompts..."
-cp "$PROMPTS/claude_coder.md"  "$PROMPTS/claude_coder.md.bak"  2>/dev/null || true
-cp "$PROMPTS/claude_final.md"  "$PROMPTS/claude_final.md.bak"  2>/dev/null || true
+cp "$PROMPTS/claude_coder.md"       "$PROMPTS/claude_coder.md.bak"       2>/dev/null || true
+cp "$PROMPTS/claude_final.md"       "$PROMPTS/claude_final.md.bak"       2>/dev/null || true
+cp "$PROMPTS/gemini_validator.md"   "$PROMPTS/gemini_validator.md.bak"   2>/dev/null || true
 ok "Backups saved as .bak files"
 
 info "Updating claude_coder.md..."
@@ -173,6 +174,75 @@ BRAND RULES -- CRITICAL (when brand context is provided above):
 - Brand fidelity is non-negotiable -- it takes priority over reviewer preferences
 PROMPT
 ok "claude_final.md updated"
+
+info "Updating gemini_validator.md..."
+cat > "$PROMPTS/gemini_validator.md" << 'PROMPT'
+You are an independent security and correctness auditor performing a fresh adversarial review.
+You have not seen any prior review. Approach the code as an attacker who can also read code fluently.
+
+Your task: find real problems that could be exploited or that will fail in production.
+Prefer signal over coverage. A short list of genuine findings beats a long list of noise.
+
+---
+
+## SCOPE
+
+You are reviewing application source code only:
+- Business logic and control flow
+- Authentication and authorization checks
+- Data handling, validation, and sanitisation
+- API surface and data exposure
+- Dependency usage and known CVE risk
+
+Out of scope (do not flag):
+- Infrastructure, deployment, or environment assumptions
+- Brand colours, fonts, or design tokens (these are intentional, not magic strings)
+- Style preferences or documentation gaps (covered by Stage 2)
+- Speculative risks with no realistic attack path
+
+---
+
+## FINDINGS FORMAT
+
+For each finding:
+
+**[SEVERITY: Critical | High | Medium | Low] [CONFIDENCE: High | Medium | Low]**
+**Category:** (e.g. Injection, Broken Auth, IDOR, Race Condition, Data Exposure)
+**Location:** file and line/function if identifiable
+**What:** what the vulnerability or bug is
+**Attack path:** how an attacker or bad input reaches it (skip if purely a correctness issue)
+**Fix:** concrete remediation, not generic advice
+
+Only include findings you are confident in. Mark speculative findings [CONFIDENCE: Low] and keep them brief.
+
+---
+
+## CHAINED ATTACK PATHS
+
+After individual findings, note any multi-step chains where combining two or more weaknesses
+produces a higher-severity outcome than either alone.
+Format: Chain: [Finding A] + [Finding B] → [outcome]
+
+---
+
+## COMPLIANCE CHECKLIST
+
+Quick pass -- flag only genuine failures, not absences of boilerplate:
+- [ ] No hardcoded secrets or credentials
+- [ ] Input validation present at trust boundaries
+- [ ] Error responses do not leak stack traces or internal paths
+- [ ] Logging does not capture or expose PII
+- [ ] No SQL / command / template injection vectors
+- [ ] Auth checks present on all protected routes/operations
+
+---
+
+## CORRECTNESS ISSUES
+
+Logic bugs, unhandled edge cases, race conditions, or incorrect assumptions that are not
+security issues. Same format: location, what, fix.
+PROMPT
+ok "gemini_validator.md updated"
 
 # ── Update .env model and token budget ───────────────────────────────────────
 info "Updating .env model and token settings..."
@@ -283,13 +353,15 @@ _check() {
   done
   printf "    %-18s -- %d/%d checks OK\n" "$label" "$found" "$total"
 }
-_check "orchestrate.py"  "$SHARED/orchestrate.py"  "extract_code_blocks" "install_dependencies" "from_stage" "setup_brand_assets" "claude-opus-4-7" "xhigh"
-_check "claude_coder.md" "$PROMPTS/claude_coder.md" "OUTPUT RULES" "FILE MODIFICATION" "BRAND RULES"
-_check "claude_final.md" "$PROMPTS/claude_final.md" "OUTPUT RULES" "BRAND RULES"
-_check "new-project.sh"  "$HOME/new-project.sh"     "\-\-brand" "\-\-lang" "submodule"
-_check ".env"            "$ENV_FILE"                "claude-opus-4-7" "gpt-5.5" "gemini-3.5-flash" "MAX_OUTPUT_TOKENS"
+_check "orchestrate.py"        "$SHARED/orchestrate.py"          "extract_code_blocks" "install_dependencies" "from_stage" "setup_brand_assets" "claude-opus-4-7" "xhigh"
+_check "claude_coder.md"      "$PROMPTS/claude_coder.md"        "OUTPUT RULES" "FILE MODIFICATION" "BRAND RULES"
+_check "claude_final.md"      "$PROMPTS/claude_final.md"        "OUTPUT RULES" "BRAND RULES"
+_check "gemini_validator.md"  "$PROMPTS/gemini_validator.md"    "SEVERITY" "CONFIDENCE" "CHAINED ATTACK PATHS" "COMPLIANCE CHECKLIST"
+_check "new-project.sh"       "$HOME/new-project.sh"            "\-\-brand" "\-\-lang" "submodule"
+_check ".env"                 "$ENV_FILE"                       "claude-opus-4-7" "gpt-5.5" "gemini-3.5-flash" "MAX_OUTPUT_TOKENS"
 echo ""
 echo "  Backed up originals:"
 echo "    $PROMPTS/claude_coder.md.bak"
 echo "    $PROMPTS/claude_final.md.bak"
+echo "    $PROMPTS/gemini_validator.md.bak"
 echo ""
