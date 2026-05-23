@@ -187,6 +187,20 @@ if [[ -f "$ENV_FILE" ]]; then
     ok "  CLAUDE_MODEL -> claude-opus-4-7"
   fi
 
+  # Update GPT_MODEL if on older version
+  if grep -q "^GPT_MODEL=gpt-5\.4" "$ENV_FILE"; then
+    sed -i 's/^GPT_MODEL=gpt-5\.4/GPT_MODEL=gpt-5.5/' "$ENV_FILE"
+    ENV_STATUS="updated"
+    ok "  GPT_MODEL -> gpt-5.5"
+  fi
+
+  # Update GEMINI_MODEL if on older version
+  if grep -q "^GEMINI_MODEL=gemini-2\.5-flash" "$ENV_FILE"; then
+    sed -i 's/^GEMINI_MODEL=gemini-2\.5-flash/GEMINI_MODEL=gemini-3.5-flash/' "$ENV_FILE"
+    ENV_STATUS="updated"
+    ok "  GEMINI_MODEL -> gemini-3.5-flash"
+  fi
+
   # Update MAX_OUTPUT_TOKENS from 16000 to 20000 if not already higher
   if grep -q "^MAX_OUTPUT_TOKENS=16000" "$ENV_FILE"; then
     sed -i 's/^MAX_OUTPUT_TOKENS=16000/MAX_OUTPUT_TOKENS=20000/' "$ENV_FILE"
@@ -232,7 +246,7 @@ _check "orchestrate.py"  "$SHARED/orchestrate.py"  "extract_code_blocks" "instal
 _check "claude_coder.md" "$PROMPTS/claude_coder.md" "OUTPUT RULES" "FILE MODIFICATION" "BRAND RULES"
 _check "claude_final.md" "$PROMPTS/claude_final.md" "OUTPUT RULES" "BRAND RULES"
 _check "new-project.sh"  "$HOME/new-project.sh"     "\-\-brand" "\-\-lang" "submodule"
-_check ".env"            "$ENV_FILE"                "claude-opus-4-7" "MAX_OUTPUT_TOKENS"
+_check ".env"            "$ENV_FILE"                "claude-opus-4-7" "gpt-5.5" "gemini-3.5-flash" "MAX_OUTPUT_TOKENS"
 echo ""
 echo "  Backed up originals:"
 echo "    $PROMPTS/claude_coder.md.bak"

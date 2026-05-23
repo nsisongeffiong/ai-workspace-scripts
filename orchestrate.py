@@ -43,8 +43,8 @@ logging.basicConfig(
 log = logging.getLogger("pipeline")
 
 CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-opus-4-7")
-GPT_MODEL    = os.getenv("GPT_MODEL",    "gpt-5.4")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+GPT_MODEL    = os.getenv("GPT_MODEL",    "gpt-5.5")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
 MAX_RETRIES       = int(os.getenv("MAX_RETRIES", "3"))
 MAX_OUTPUT_TOKENS = int(os.getenv("MAX_OUTPUT_TOKENS", "20000"))
 
