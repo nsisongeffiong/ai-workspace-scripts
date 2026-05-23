@@ -11,10 +11,10 @@ This is a multi-model agentic development pipeline that runs on any Unix-based s
 
 | Stage | Model | Role |
 |-------|-------|------|
-| 1 | Claude Opus 4.6 | Initial implementation |
+| 1 | Claude Opus 4.7 | Initial implementation |
 | 2 | GPT-5.4 | Code quality & documentation review |
 | 3 | Gemini 2.5 Flash | Security & correctness audit |
-| 4 | Claude Opus 4.6 | Final synthesis & corrections |
+| 4 | Claude Opus 4.7 | Final synthesis & corrections |
 
 ---
 

@@ -42,11 +42,11 @@ logging.basicConfig(
 )
 log = logging.getLogger("pipeline")
 
-CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-opus-4-6")
+CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-opus-4-7")
 GPT_MODEL    = os.getenv("GPT_MODEL",    "gpt-5.4")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 MAX_RETRIES       = int(os.getenv("MAX_RETRIES", "3"))
-MAX_OUTPUT_TOKENS = int(os.getenv("MAX_OUTPUT_TOKENS", "16000"))
+MAX_OUTPUT_TOKENS = int(os.getenv("MAX_OUTPUT_TOKENS", "20000"))
 
 
 def _require_env(key: str) -> str:
@@ -252,10 +252,12 @@ def stage_1_claude_code(task: str) -> str:
     msg = claude_client.messages.create(
         model=CLAUDE_MODEL,
         max_tokens=MAX_OUTPUT_TOKENS,
+        thinking={"type": "adaptive"},
+        output_config={"effort": "xhigh"},
         system=load_prompt("claude_coder"),
         messages=[{"role": "user", "content": task}],
     )
-    text = msg.content[0].text
+    text = "".join(b.text for b in msg.content if b.type == "text")
     log.info("  Tokens in/out: %d / %d", msg.usage.input_tokens, msg.usage.output_tokens)
     extract_code_blocks(text)
     install_dependencies()
@@ -319,10 +321,12 @@ def stage_4_claude_final() -> str:
     msg = claude_client.messages.create(
         model=CLAUDE_MODEL,
         max_tokens=MAX_OUTPUT_TOKENS,
+        thinking={"type": "adaptive"},
+        output_config={"effort": "xhigh"},
         system=load_prompt("claude_final"),
         messages=[{"role": "user", "content": context}],
     )
-    text = msg.content[0].text
+    text = "".join(b.text for b in msg.content if b.type == "text")
     log.info("  Tokens in/out: %d / %d", msg.usage.input_tokens, msg.usage.output_tokens)
     write_file(PROJECT_ROOT / "reviews" / "final-review.md", text)
     extract_code_blocks(text)
@@ -382,9 +386,9 @@ Return ONLY the BRAND_TOKENS.md content -- no preamble, no explanation."""
         msg = claude_client.messages.create(
             model=CLAUDE_MODEL,
             max_tokens=1500,
-            messages=[{{"role": "user", "content": prompt}}],
+            messages=[{"role": "user", "content": prompt}],
         )
-        tokens_content = msg.content[0].text.strip()
+        tokens_content = "".join(b.text for b in msg.content if b.type == "text").strip()
         tokens_path.write_text(tokens_content, encoding="utf-8")
         distilled_tokens = len(tokens_content) // 4
         saved = brand_tokens - distilled_tokens
@@ -446,7 +450,7 @@ def setup_brand_assets() -> None:
             max_tokens=256,
             messages=[{"role": "user", "content": prompt}],
         )
-        raw = msg.content[0].text.strip()
+        raw = "".join(b.text for b in msg.content if b.type == "text").strip()
         placement = json.loads(raw)
     except Exception as e:
         log.warning("  Brand placement check failed (%s) -- skipping asset copy", e)

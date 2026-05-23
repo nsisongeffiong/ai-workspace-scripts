@@ -228,11 +228,11 @@ ANTHROPIC_API_KEY=${ANTHROPIC_KEY}
 OPENAI_API_KEY=${OPENAI_KEY}
 GOOGLE_API_KEY=${GOOGLE_KEY}
 
-CLAUDE_MODEL=claude-opus-4-6
+CLAUDE_MODEL=claude-opus-4-7
 GPT_MODEL=gpt-5.4
 GEMINI_MODEL=gemini-2.5-flash
 
-MAX_OUTPUT_TOKENS=16000
+MAX_OUTPUT_TOKENS=20000
 MAX_RETRIES=3
 LOG_LEVEL=INFO
 ENVFILE
@@ -245,13 +245,14 @@ ANTHROPIC_API_KEY=sk-ant-...
 OPENAI_API_KEY=sk-...
 GOOGLE_API_KEY=AIza...
 
-CLAUDE_MODEL=claude-opus-4-6
+CLAUDE_MODEL=claude-opus-4-7
 GPT_MODEL=gpt-5.4
 GEMINI_MODEL=gemini-2.5-flash
 
 # Token budget for Stage 1 and Stage 4 (code generation stages).
-# 16000 comfortably fits a real-world Stage 1 build; bump to 20000 if truncation occurs.
-MAX_OUTPUT_TOKENS=16000
+# 20000 accounts for the 4.7 tokenizer using up to 1.35x more tokens than 4.6.
+# Bump to higher if truncation occurs; 4.7 supports up to 128K output tokens.
+MAX_OUTPUT_TOKENS=20000
 MAX_RETRIES=3
 LOG_LEVEL=INFO
 ENVEXAMPLE
@@ -548,7 +549,7 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent / ".env")
 
-CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-opus-4-6")
+CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-opus-4-7")
 GPT_MODEL    = os.getenv("GPT_MODEL",    "gpt-5.4")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 

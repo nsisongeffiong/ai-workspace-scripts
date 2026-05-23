@@ -174,6 +174,37 @@ BRAND RULES -- CRITICAL (when brand context is provided above):
 PROMPT
 ok "claude_final.md updated"
 
+# ── Update .env model and token budget ───────────────────────────────────────
+info "Updating .env model and token settings..."
+ENV_FILE="$SHARED/.env"
+ENV_STATUS="no changes needed"
+
+if [[ -f "$ENV_FILE" ]]; then
+  # Update CLAUDE_MODEL if it's set to an older version
+  if grep -q "^CLAUDE_MODEL=claude-opus-4-6" "$ENV_FILE"; then
+    sed -i 's/^CLAUDE_MODEL=claude-opus-4-6/CLAUDE_MODEL=claude-opus-4-7/' "$ENV_FILE"
+    ENV_STATUS="updated"
+    ok "  CLAUDE_MODEL -> claude-opus-4-7"
+  fi
+
+  # Update MAX_OUTPUT_TOKENS from 16000 to 20000 if not already higher
+  if grep -q "^MAX_OUTPUT_TOKENS=16000" "$ENV_FILE"; then
+    sed -i 's/^MAX_OUTPUT_TOKENS=16000/MAX_OUTPUT_TOKENS=20000/' "$ENV_FILE"
+    ENV_STATUS="updated"
+    ok "  MAX_OUTPUT_TOKENS -> 20000"
+  fi
+
+  # Add MAX_OUTPUT_TOKENS if missing entirely
+  if ! grep -q "^MAX_OUTPUT_TOKENS=" "$ENV_FILE"; then
+    echo "" >> "$ENV_FILE"
+    echo "MAX_OUTPUT_TOKENS=20000" >> "$ENV_FILE"
+    ENV_STATUS="updated"
+    ok "  MAX_OUTPUT_TOKENS=20000 added"
+  fi
+else
+  warn ".env not found at $ENV_FILE -- skipping (run setup-workspace.sh first)"
+fi
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
 echo -e "${GREEN}${BOLD}"
@@ -186,6 +217,7 @@ echo "    orchestrate.py   -- $ORCHESTRATE_STATUS"
 echo "    new-project.sh   -- $NEW_PROJECT_STATUS"
 echo "    claude_coder.md  -- updated"
 echo "    claude_final.md  -- updated"
+echo "    .env             -- $ENV_STATUS"
 echo ""
 echo "  Verification:"
 _check() {
@@ -196,10 +228,11 @@ _check() {
   done
   printf "    %-18s -- %d/%d checks OK\n" "$label" "$found" "$total"
 }
-_check "orchestrate.py"  "$SHARED/orchestrate.py"  "extract_code_blocks" "install_dependencies" "from_stage" "setup_brand_assets"
+_check "orchestrate.py"  "$SHARED/orchestrate.py"  "extract_code_blocks" "install_dependencies" "from_stage" "setup_brand_assets" "claude-opus-4-7" "xhigh"
 _check "claude_coder.md" "$PROMPTS/claude_coder.md" "OUTPUT RULES" "FILE MODIFICATION" "BRAND RULES"
 _check "claude_final.md" "$PROMPTS/claude_final.md" "OUTPUT RULES" "BRAND RULES"
 _check "new-project.sh"  "$HOME/new-project.sh"     "\-\-brand" "\-\-lang" "submodule"
+_check ".env"            "$ENV_FILE"                "claude-opus-4-7" "MAX_OUTPUT_TOKENS"
 echo ""
 echo "  Backed up originals:"
 echo "    $PROMPTS/claude_coder.md.bak"
