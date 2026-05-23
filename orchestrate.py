@@ -2,10 +2,12 @@
 """
 Multi-model pipeline orchestrator -- cloud edition.
 
-Stage 1: Claude Opus 4.6  -- initial implementation
-Stage 2: GPT-4o           -- code quality & documentation review
-Stage 3: Gemini 2.5 Flash -- security & correctness audit
-Stage 4: Claude Opus 4.6  -- final synthesis and corrections
+Stage 1: Claude (CLAUDE_MODEL) -- initial implementation
+Stage 2: GPT    (GPT_MODEL)    -- code quality & documentation review
+Stage 3: Gemini (GEMINI_MODEL) -- security & correctness audit
+Stage 4: Claude (CLAUDE_MODEL) -- final synthesis and corrections
+
+Models are configured via environment variables in .env (see .env.example).
 
 Usage:
   PROJECT_ROOT=/path/to/project python orchestrate.py "task description"
@@ -103,7 +105,7 @@ def check_brand_budget() -> None:
             "Brand context is ~%d tokens -- this leaves only ~%d tokens for code output. "
             "Consider splitting your task into smaller focused pipeline runs, or trimming "
             "the brand guide to essential design tokens only (colours, fonts, spacing).",
-            tokens_approx, 8192 - tokens_approx
+            tokens_approx, MAX_OUTPUT_TOKENS - tokens_approx
         )
 
 def read_src() -> str:
@@ -246,7 +248,7 @@ def git_commit(repo: Repo, message: str, paths: list) -> None:
        wait=wait_exponential(multiplier=2, min=4, max=60),
        retry=retry_if_exception_type(anthropic.RateLimitError))
 def stage_1_claude_code(task: str) -> str:
-    log.info("Stage 1 -- Claude Opus 4.6: initial implementation")
+    log.info("Stage 1 -- %s: initial implementation", CLAUDE_MODEL)
     msg = claude_client.messages.create(
         model=CLAUDE_MODEL,
         max_tokens=MAX_OUTPUT_TOKENS,
@@ -260,13 +262,13 @@ def stage_1_claude_code(task: str) -> str:
     return text
 
 
-# -- Stage 2: GPT-4o reviews --------------------------------------------------
+# -- Stage 2: GPT review -----------------------------------------------------
 
 @retry(stop=stop_after_attempt(MAX_RETRIES),
        wait=wait_exponential(multiplier=2, min=4, max=60),
        retry=retry_if_exception_type(openai.RateLimitError))
 def stage_2_gpt_review() -> str:
-    log.info("Stage 2 -- GPT-4o: code quality & documentation review")
+    log.info("Stage 2 -- %s: code quality & documentation review", GPT_MODEL)
     resp = openai_client.chat.completions.create(
         model=GPT_MODEL,
         max_completion_tokens=4096,
@@ -284,7 +286,7 @@ def stage_2_gpt_review() -> str:
 # -- Stage 3: Gemini validates ------------------------------------------------
 
 def stage_3_gemini_validate() -> str:
-    log.info("Stage 3 -- Gemini 2.5 Flash: security & correctness audit")
+    log.info("Stage 3 -- %s: security & correctness audit", GEMINI_MODEL)
     resp = gemini_client.models.generate_content(
         model=GEMINI_MODEL,
         contents=read_src(),
@@ -304,13 +306,13 @@ def stage_3_gemini_validate() -> str:
        wait=wait_exponential(multiplier=2, min=4, max=60),
        retry=retry_if_exception_type(anthropic.RateLimitError))
 def stage_4_claude_final() -> str:
-    log.info("Stage 4 -- Claude Opus 4.6: final synthesis")
+    log.info("Stage 4 -- %s: final synthesis", CLAUDE_MODEL)
     gpt_fb    = (PROJECT_ROOT / "reviews" / "review-gpt.md").read_text(encoding="utf-8")
     gemini_fb = (PROJECT_ROOT / "reviews" / "review-gemini.md").read_text(encoding="utf-8")
     context = (
         "<review_content>\n"
-        f"## GPT-4o Review\n{gpt_fb}\n\n"
-        f"## Gemini 2.5 Flash Review\n{gemini_fb}\n"
+        f"## {GPT_MODEL} Review\n{gpt_fb}\n\n"
+        f"## {GEMINI_MODEL} Review\n{gemini_fb}\n"
         "</review_content>\n\n"
         f"## Source Code\n{read_src()}"
     )
@@ -501,7 +503,7 @@ def run(task: str, from_stage: int = 1) -> None:
         stage_3_gemini_validate()
 
     if from_stage <= 2 or from_stage == 3:
-        git_commit(repo, "review: gpt-5.4 and gemini feedback", [PROJECT_ROOT / "reviews"])
+        git_commit(repo, f"review: {GPT_MODEL} and {GEMINI_MODEL} feedback", [PROJECT_ROOT / "reviews"])
 
     if from_stage <= 4:
         stage_4_claude_final()

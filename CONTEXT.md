@@ -92,20 +92,18 @@ bash ~/new-project.sh my-project-name
 - Restore files from git on build failure: \`git checkout HEAD -- <file>\`
 - For large commands (>3KB) always create a .sh script file -- never paste directly into terminal
 
-### Next.js / Supabase rules
-- In API route files (route.ts) ALWAYS use \`createServerClient()\` -- never \`createClient()\`
-- In React components ALWAYS use \`createClient()\` -- never \`createServerClient()\`
-- Never expose \`SUPABASE_SECRET_KEY\` with \`NEXT_PUBLIC_\` prefix
-- Always import shared types from \`@/types/database.types\` -- never from page.tsx
-- Validate all required fields at the top of every API route before any DB calls
-- Wrap all email sending in try/catch so email failures never break the main flow
-- No \`console.log\` or \`console.error\` in production code
+### Stack-specific rules
+The shared prompts include gated sections for Python, Node.js/TypeScript, Next.js/React, and Go.
+These apply automatically when the project uses that stack — no manual enabling needed.
 
-### Security rules
-- All admin API routes must call \`verifyAdmin(request)\` at the top
-- Escape all user inputs in HTML email templates using \`escapeHtml()\`
-- Use \`replyTo\` with raw (not HTML-escaped) email addresses
-- Use raw name (not HTML-escaped) in email subject lines
+For project-specific overrides (e.g. a particular DB client pattern or auth helper), copy the
+relevant prompt from `~/.ai-workspace/.shared/prompts/` into your project's `prompts/` folder
+and edit the local copy. Local copies take precedence; they are never committed to the shared repo.
+
+### Security rules (all stacks)
+- All user inputs used in HTML must be HTML-escaped before interpolation
+- All admin routes must verify authentication before any data operation
+- Never expose secret keys with public/client-side prefixes
 
 ---
 
@@ -134,7 +132,5 @@ claude
 | `nvm: command not found` | `source ~/.bashrc` |
 | Pipeline output incomplete | Task too large -- split into smaller focused tasks |
 | `git push` fails no upstream | `git push --set-upstream origin "$(git branch --show-current)"` |
-| Build fails with type error | Check local interfaces match database schema exactly |
-| Admin routes return 401 | Ensure `verifyAdmin(request)` is called at top of route |
-| Emails not sending | Check RESEND_API_KEY in .env.local and Vercel env vars |
-| Times showing wrong timezone | Add `timeZone: 'Europe/London'` to all date formatting calls |
+| Build fails with type error | Check local interfaces match data schema exactly |
+| Stage 3 returns 503 | Gemini overloaded -- wait 5–10 min then `python scripts/run.py --from-stage 3 "..."` |

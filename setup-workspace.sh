@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 #  Multi-Model Agentic Dev Environment -- ONE-TIME WORKSPACE SETUP
-#  Cloud edition: Claude Opus 4.6 (Anthropic) | GPT-4o (OpenAI) | Gemini 2.0 Flash (Google)
+#  Cloud edition: Claude (Anthropic) | GPT (OpenAI) | Gemini (Google)
 #
 #  Run this ONCE inside WSL2:  chmod +x setup-workspace.sh && ./setup-workspace.sh
 #  Resume after a failure:     ./setup-workspace.sh
@@ -232,6 +232,7 @@ CLAUDE_MODEL=claude-opus-4-6
 GPT_MODEL=gpt-5.4
 GEMINI_MODEL=gemini-2.5-flash
 
+MAX_OUTPUT_TOKENS=16000
 MAX_RETRIES=3
 LOG_LEVEL=INFO
 ENVFILE
@@ -248,6 +249,9 @@ CLAUDE_MODEL=claude-opus-4-6
 GPT_MODEL=gpt-5.4
 GEMINI_MODEL=gemini-2.5-flash
 
+# Token budget for Stage 1 and Stage 4 (code generation stages).
+# 16000 comfortably fits a real-world Stage 1 build; bump to 20000 if truncation occurs.
+MAX_OUTPUT_TOKENS=16000
 MAX_RETRIES=3
 LOG_LEVEL=INFO
 ENVEXAMPLE
