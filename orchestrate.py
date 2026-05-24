@@ -442,6 +442,9 @@ def setup_brand_assets() -> None:
     """
     import json, shutil
 
+    distil_brand_tokens()
+    check_brand_budget()
+
     brand_dir = PROJECT_ROOT / "brand"
     if not brand_dir.exists() or not any(brand_dir.iterdir()):
         return
