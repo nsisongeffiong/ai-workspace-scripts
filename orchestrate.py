@@ -162,43 +162,73 @@ def read_src() -> str:
     )
 
 
+_BLOCKED_TARGETS = {".git", ".env", ".env.local", ".env.production"}
+
+
+def _safe_path(raw: str):
+    """Resolve a model-supplied path; return None if unsafe to write."""
+    if Path(raw).is_absolute():
+        log.warning("  Blocked absolute path from model output: %s", raw)
+        return None
+    resolved = (PROJECT_ROOT / raw).resolve()
+    try:
+        resolved.relative_to(PROJECT_ROOT.resolve())
+    except ValueError:
+        log.warning("  Blocked path traversal from model output: %s", raw)
+        return None
+    for part in resolved.parts:
+        if part in _BLOCKED_TARGETS:
+            log.warning("  Blocked sensitive target from model output: %s", raw)
+            return None
+    return resolved
+
+
 def write_file(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
     log.info("  Wrote %s (%d chars)", path.relative_to(PROJECT_ROOT), len(content))
 
 
-def extract_code_blocks(text: str) -> None:
-    """Parse labelled code blocks and write files to disk.
+def extract_code_blocks(text: str) -> list:
+    """Parse labelled code blocks, validate paths, and write files to disk.
 
-    Trusts the filepath the AI provides on the fence line.
-    Falls back to src/generated.py if no filepath is found.
+    Falls back to src/generated.py if no labelled filepath is found.
+    Returns the list of Path objects actually written.
     """
     LANGS = r"tsx?|jsx?|typescript|javascript|css|scss|html|python|go|json|yaml|sh|bash|mjs|cjs"
     EXT   = r"tsx?|jsx?|css|scss|html|py|go|json|yaml|sh|md|mjs|cjs|toml|txt|env"
+
+    written = []
 
     # Pattern 1: path on the fence line  e.g. ```tsx src/app/page.tsx
     pattern1 = re.compile(
         rf"```(?:{LANGS})\s+([\w./\-]+\.(?:{EXT}))\n(.*?)```",
         re.DOTALL
     )
-    written = 0
     for m in pattern1.finditer(text):
-        write_file(PROJECT_ROOT / m.group(1), m.group(2))
-        written += 1
+        path = _safe_path(m.group(1))
+        if path:
+            write_file(path, m.group(2))
+            written.append(path)
 
     # Pattern 2: path as first-line comment  e.g. ```tsx\n// src/app/page.tsx
-    if written == 0:
+    if not written:
         pattern2 = re.compile(
             rf"```(?:{LANGS})\n(?://\s*|#\s*)?([\w./\-]+\.(?:{EXT}))\n(.*?)```",
             re.DOTALL
         )
         for m in pattern2.finditer(text):
-            write_file(PROJECT_ROOT / m.group(1), m.group(2))
-            written += 1
+            path = _safe_path(m.group(1))
+            if path:
+                write_file(path, m.group(2))
+                written.append(path)
 
-    if written == 0:
-        write_file(PROJECT_ROOT / "src" / "generated.py", text)
+    if not written:
+        fallback = PROJECT_ROOT / "src" / "generated.py"
+        write_file(fallback, text)
+        written.append(fallback)
+
+    return written
 
 
 def install_dependencies() -> None:
@@ -238,8 +268,9 @@ def git_commit(repo: Repo, message: str, paths: list) -> None:
     try:
         repo.index.commit(message)
         log.info("  Git: %s", message)
-    except Exception:
-        pass
+    except Exception as e:
+        log.error("  Git commit failed: %s", e)
+        raise
 
 
 # -- Stage 1: Claude codes ----------------------------------------------------
@@ -259,9 +290,9 @@ def stage_1_claude_code(task: str) -> str:
     )
     text = "".join(b.text for b in msg.content if b.type == "text")
     log.info("  Tokens in/out: %d / %d", msg.usage.input_tokens, msg.usage.output_tokens)
-    extract_code_blocks(text)
+    written = extract_code_blocks(text)
     install_dependencies()
-    return text
+    return text, written
 
 
 # -- Stage 2: GPT review -----------------------------------------------------
@@ -307,7 +338,7 @@ def stage_3_gemini_validate() -> str:
 @retry(stop=stop_after_attempt(MAX_RETRIES),
        wait=wait_exponential(multiplier=2, min=4, max=60),
        retry=retry_if_exception_type(anthropic.RateLimitError))
-def stage_4_claude_final(stage1_output: str = "") -> str:
+def stage_4_claude_final(stage1_output: str = "") -> list:
     log.info("Stage 4 -- %s: final synthesis", CLAUDE_MODEL)
     gpt_fb    = (PROJECT_ROOT / "reviews" / "review-gpt.md").read_text(encoding="utf-8")
     gemini_fb = (PROJECT_ROOT / "reviews" / "review-gemini.md").read_text(encoding="utf-8")
@@ -329,9 +360,9 @@ def stage_4_claude_final(stage1_output: str = "") -> str:
     text = "".join(b.text for b in msg.content if b.type == "text")
     log.info("  Tokens in/out: %d / %d", msg.usage.input_tokens, msg.usage.output_tokens)
     write_file(PROJECT_ROOT / "reviews" / "final-review.md", text)
-    extract_code_blocks(text)
+    written = extract_code_blocks(text)
     install_dependencies()
-    return text
+    return written
 
 
 
@@ -498,8 +529,8 @@ def run(task: str, from_stage: int = 1) -> None:
     stage1_output = ""
     if from_stage <= 1:
         setup_brand_assets()
-        stage1_output = stage_1_claude_code(task)
-        git_commit(repo, "feat(claude): initial implementation", [PROJECT_ROOT / "src"])
+        stage1_output, stage1_written = stage_1_claude_code(task)
+        git_commit(repo, "feat(claude): initial implementation", stage1_written)
 
     if from_stage <= 2:
         stage_2_gpt_review()
@@ -511,10 +542,10 @@ def run(task: str, from_stage: int = 1) -> None:
         git_commit(repo, f"review: {GPT_MODEL} and {GEMINI_MODEL} feedback", [PROJECT_ROOT / "reviews"])
 
     if from_stage <= 4:
-        stage_4_claude_final(stage1_output)
+        stage4_written = stage_4_claude_final(stage1_output)
         git_commit(repo, "review(claude): final synthesis", [
             PROJECT_ROOT / "reviews" / "final-review.md",
-            PROJECT_ROOT / "src",
+            *stage4_written,
         ])
 
     log.info("Done in %.1fs | branch: %s", time.monotonic() - start, branch)
