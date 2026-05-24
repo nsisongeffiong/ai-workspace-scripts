@@ -307,7 +307,7 @@ def stage_3_gemini_validate() -> str:
 @retry(stop=stop_after_attempt(MAX_RETRIES),
        wait=wait_exponential(multiplier=2, min=4, max=60),
        retry=retry_if_exception_type(anthropic.RateLimitError))
-def stage_4_claude_final() -> str:
+def stage_4_claude_final(stage1_output: str = "") -> str:
     log.info("Stage 4 -- %s: final synthesis", CLAUDE_MODEL)
     gpt_fb    = (PROJECT_ROOT / "reviews" / "review-gpt.md").read_text(encoding="utf-8")
     gemini_fb = (PROJECT_ROOT / "reviews" / "review-gemini.md").read_text(encoding="utf-8")
@@ -316,7 +316,7 @@ def stage_4_claude_final() -> str:
         f"## {GPT_MODEL} Review\n{gpt_fb}\n\n"
         f"## {GEMINI_MODEL} Review\n{gemini_fb}\n"
         "</review_content>\n\n"
-        f"## Source Code\n{read_src()}"
+        f"## Source Code\n{stage1_output if stage1_output else read_src()}"
     )
     msg = claude_client.messages.create(
         model=CLAUDE_MODEL,
@@ -495,9 +495,10 @@ def run(task: str, from_stage: int = 1) -> None:
         repo.git.checkout("-b", branch)
         log.info("Branch:  %s", branch)
 
+    stage1_output = ""
     if from_stage <= 1:
         setup_brand_assets()
-        stage_1_claude_code(task)
+        stage1_output = stage_1_claude_code(task)
         git_commit(repo, "feat(claude): initial implementation", [PROJECT_ROOT / "src"])
 
     if from_stage <= 2:
@@ -510,7 +511,7 @@ def run(task: str, from_stage: int = 1) -> None:
         git_commit(repo, f"review: {GPT_MODEL} and {GEMINI_MODEL} feedback", [PROJECT_ROOT / "reviews"])
 
     if from_stage <= 4:
-        stage_4_claude_final()
+        stage_4_claude_final(stage1_output)
         git_commit(repo, "review(claude): final synthesis", [
             PROJECT_ROOT / "reviews" / "final-review.md",
             PROJECT_ROOT / "src",
