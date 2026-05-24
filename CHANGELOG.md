@@ -4,6 +4,20 @@ All notable changes to ai-workspace-scripts are recorded here.
 
 ---
 
+## [May 2026] — Pipeline improvements
+
+### Fix
+- model-supplied file paths are now resolved and validated before writing. Absolute paths, path traversal (`../`), and sensitive targets (`.git`, `.env`, `.env.local`, `.env.production`) are blocked and logged as warnings.
+- `extract_code_blocks()` now returns the list of paths it wrote. Stage 1 and Stage 4 pass that list directly to `git_commit()` instead of staging broad directories like `src/`. Root-level files (e.g. `package.json`, `tsconfig.json`) are now committed correctly.
+- `git_commit()` no longer swallows exceptions silently. Failures are logged at ERROR level and re-raised, stopping the pipeline rather than reporting false success.
+- `distil_brand_tokens()` and `check_brand_budget()` were defined but never called. Both are now invoked at the start of `setup_brand_assets()`, so brand distillation and budget warnings run on every branded project.
+- Node scaffold in `new-project.sh` used `jest` as the default test runner, but Jest was never installed. Replaced with `node --test`, which is built into Node 20 and requires no dependencies.
+
+### Chore
+- added to enforce LF line endings on `.sh`, `.py`, and `.md` files, preventing CRLF breakage when contributors clone on Windows.
+
+---
+
 ## [May 2026] — Review token limits
 
 ### Fix
