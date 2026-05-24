@@ -8,6 +8,7 @@ All notable changes to ai-workspace-scripts are recorded here.
 
 ### Fix
 - Bumped `max_completion_tokens` (Stage 2, GPT) and `max_output_tokens` (Stage 3, Gemini) from 4096 → 16000. GPT-5.5 is a reasoning model and consumes internal tokens before producing visible output — at 4096 the response was hitting the ceiling with `finish_reason: length` and returning an empty string. Both review files were writing 0 chars as a result.
+- Stage 4 now receives Stage 1's raw output directly instead of calling `read_src()`, which diffs all files since the initial scaffold commit. On multi-phase builds this was pulling the entire accumulated source into Stage 4's context, pushing token usage to the 20k ceiling and truncating output. Falls back to `read_src()` when resuming from `--from-stage 4`.
 
 ---
 
