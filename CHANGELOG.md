@@ -4,7 +4,14 @@ All notable changes to ai-workspace-scripts are recorded here.
 
 ---
 
-## [Unreleased] — May 2026
+## [May 2026] — Review token limits
+
+### Fix
+- Bumped `max_completion_tokens` (Stage 2, GPT) and `max_output_tokens` (Stage 3, Gemini) from 4096 → 16000. GPT-5.5 is a reasoning model and consumes internal tokens before producing visible output — at 4096 the response was hitting the ceiling with `finish_reason: length` and returning an empty string. Both review files were writing 0 chars as a result.
+
+---
+
+## [May 2026] — gemini_validator rewrite
 
 ### Prompts
 - Rewrote `gemini_validator.md` with adversarial framing, structured findings format (severity + confidence levels), chained attack paths section, and explicit out-of-scope exclusions (brand tokens, infra, style). Adapted from a prompt by [@hackSultan](https://x.com/hackSultan).
