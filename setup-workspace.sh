@@ -3,7 +3,8 @@
 #  Multi-Model Agentic Dev Environment -- ONE-TIME WORKSPACE SETUP
 #  Cloud edition: Claude (Anthropic) | GPT (OpenAI) | Gemini (Google)
 #
-#  Run this ONCE inside WSL2:  chmod +x setup-workspace.sh && ./setup-workspace.sh
+#  Run this ONCE:  chmod +x setup-workspace.sh && ./setup-workspace.sh
+#  Linux/macOS: run natively. Windows: run inside WSL2.
 #  Resume after a failure:     ./setup-workspace.sh
 #  Start completely fresh:     ./setup-workspace.sh --reset
 # =============================================================================
@@ -78,8 +79,11 @@ print_banner() {
 # =============================================================================
 phase_preflight() {
   step "PHASE 0 -- Pre-flight Checks"
-  grep -qi microsoft /proc/version 2>/dev/null || { error "Must run inside WSL2."; exit 1; }
-  success "Running inside WSL2"
+  case "$(uname -s)" in
+    Linux*)  success "Running on Linux" ;;
+    Darwin*) success "Running on macOS" ;;
+    *)       error "Unsupported platform: run on Linux, macOS, or WSL2."; exit 1 ;;
+  esac
   [ "$EUID" -eq 0 ] && { error "Do not run as root."; exit 1; }
   success "Running as user: $USER"
   local free_kb; free_kb=$(df -k "$HOME" | awk 'NR==2{print $4}')
@@ -547,7 +551,7 @@ phase_keyring() {
   # shellcheck disable=SC1090
   source "$SHARED_DIR/.venv/bin/activate"
 
-  # WSL2 has no D-Bus secret service, so we use keyrings.alt (plaintext
+  # Headless Linux and WSL2 have no D-Bus secret service, so we use keyrings.alt (plaintext
   # backend at ~/.local/share/python_keyring/) as a reliable fallback.
   # The .env file remains the primary secret store; keyring is secondary.
   python3 - << PYEOF
