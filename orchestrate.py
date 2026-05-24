@@ -273,7 +273,7 @@ def stage_2_gpt_review() -> str:
     log.info("Stage 2 -- %s: code quality & documentation review", GPT_MODEL)
     resp = openai_client.chat.completions.create(
         model=GPT_MODEL,
-        max_completion_tokens=4096,
+        max_completion_tokens=16000,
         timeout=120,
         messages=[
             {"role": "system", "content": load_prompt("gpt_reviewer")},
@@ -294,7 +294,7 @@ def stage_3_gemini_validate() -> str:
         contents=read_src(),
         config=genai_types.GenerateContentConfig(
             system_instruction=load_prompt("gemini_validator"),
-            max_output_tokens=4096,
+            max_output_tokens=16000,
         ),
     )
     review = resp.text
