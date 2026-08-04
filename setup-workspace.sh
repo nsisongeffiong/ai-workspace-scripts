@@ -240,11 +240,11 @@ ANTHROPIC_API_KEY=${ANTHROPIC_KEY}
 OPENAI_API_KEY=${OPENAI_KEY}
 GOOGLE_API_KEY=${GOOGLE_KEY}
 
-CLAUDE_MODEL=claude-opus-4-7
-GPT_MODEL=gpt-5.5
-GEMINI_MODEL=gemini-3.5-flash
+CLAUDE_MODEL=claude-opus-5
+GPT_MODEL=gpt-5.6-sol
+GEMINI_MODEL=gemini-3.6-flash
 
-MAX_OUTPUT_TOKENS=20000
+MAX_OUTPUT_TOKENS=64000
 MAX_RETRIES=3
 LOG_LEVEL=INFO
 ENVFILE
@@ -257,14 +257,17 @@ ANTHROPIC_API_KEY=sk-ant-...
 OPENAI_API_KEY=sk-...
 GOOGLE_API_KEY=AIza...
 
-CLAUDE_MODEL=claude-opus-4-7
-GPT_MODEL=gpt-5.5
-GEMINI_MODEL=gemini-3.5-flash
+CLAUDE_MODEL=claude-opus-5
+GPT_MODEL=gpt-5.6-sol
+GEMINI_MODEL=gemini-3.6-flash
 
 # Token budget for Stage 1 and Stage 4 (code generation stages).
-# 20000 accounts for the 4.7 tokenizer using up to 1.35x more tokens than 4.6.
-# Bump to higher if truncation occurs; 4.7 supports up to 128K output tokens.
-MAX_OUTPUT_TOKENS=20000
+# On Opus 5 thinking is on by default and max_tokens is a hard cap on TOTAL
+# output -- thinking plus response text share this budget. At xhigh effort the
+# thinking share is substantial, so 64000 leaves room for both. This is a
+# ceiling, not a reservation: you are billed only for tokens actually emitted.
+# Opus 5 supports up to 128000 output tokens.
+MAX_OUTPUT_TOKENS=64000
 MAX_RETRIES=3
 LOG_LEVEL=INFO
 ENVEXAMPLE
@@ -616,14 +619,16 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent / ".env")
 
-CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-opus-4-7")
-GPT_MODEL    = os.getenv("GPT_MODEL",    "gpt-5.5")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
+CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-opus-5")
+GPT_MODEL    = os.getenv("GPT_MODEL",    "gpt-5.6-sol")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
 
 
 def check(name, fn):
     try:
         result = fn()
+        if not result:
+            raise ValueError("empty response -- token ceiling too low for thinking/reasoning")
         print(f"  [OK]   {name}: {result[:60]}")
         return True
     except Exception as e:
@@ -633,20 +638,25 @@ def check(name, fn):
 
 def test_anthropic():
     import anthropic
+    # Thinking is on by default from Opus 5 and shares the max_tokens budget
+    # with the response text, so a tight ceiling returns no text at all.
     r = anthropic.Anthropic().messages.create(
-        model=CLAUDE_MODEL, max_tokens=20,
+        model=CLAUDE_MODEL, max_tokens=2000,
+        output_config={"effort": "low"},
         messages=[{"role": "user", "content": "Reply with only: OK"}]
     )
-    return r.content[0].text.strip()
+    # Never index content[0] -- it may be a thinking block, which has no .text
+    return "".join(b.text for b in r.content if b.type == "text").strip()
 
 
 def test_openai():
     import openai
+    # Reasoning tokens are consumed before any visible output is emitted
     r = openai.OpenAI().chat.completions.create(
-        model=GPT_MODEL, max_completion_tokens=10,
+        model=GPT_MODEL, max_completion_tokens=2000,
         messages=[{"role": "user", "content": "Reply with only: OK"}]
     )
-    return r.choices[0].message.content.strip()
+    return (r.choices[0].message.content or "").strip()
 
 
 def test_google():
@@ -655,9 +665,10 @@ def test_google():
     r = client.models.generate_content(
         model=GEMINI_MODEL,
         contents="Reply with only: OK",
-        config=genai.types.GenerateContentConfig(max_output_tokens=10),
+        config=genai.types.GenerateContentConfig(max_output_tokens=2000),
     )
-    return (r.text or "OK").strip()
+    # Do not fall back to "OK" -- that reports a pass on an empty response
+    return (r.text or "").strip()
 
 
 print(f"\nSmoke Test -- Cloud API Connectivity\n")

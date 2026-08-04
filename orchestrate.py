@@ -42,11 +42,11 @@ logging.basicConfig(
 )
 log = logging.getLogger("pipeline")
 
-CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-opus-4-7")
-GPT_MODEL    = os.getenv("GPT_MODEL",    "gpt-5.5")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
+CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-opus-5")
+GPT_MODEL    = os.getenv("GPT_MODEL",    "gpt-5.6-sol")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
 MAX_RETRIES       = int(os.getenv("MAX_RETRIES", "3"))
-MAX_OUTPUT_TOKENS = int(os.getenv("MAX_OUTPUT_TOKENS", "20000"))
+MAX_OUTPUT_TOKENS = int(os.getenv("MAX_OUTPUT_TOKENS", "64000"))
 
 
 def _require_env(key: str) -> str:
@@ -416,7 +416,8 @@ Return ONLY the BRAND_TOKENS.md content -- no preamble, no explanation."""
     try:
         msg = claude_client.messages.create(
             model=CLAUDE_MODEL,
-            max_tokens=1500,
+            max_tokens=8000,
+            output_config={"effort": "low"},
             messages=[{"role": "user", "content": prompt}],
         )
         tokens_content = "".join(b.text for b in msg.content if b.type == "text").strip()
@@ -481,7 +482,8 @@ def setup_brand_assets() -> None:
     try:
         msg = claude_client.messages.create(
             model=CLAUDE_MODEL,
-            max_tokens=256,
+            max_tokens=4000,
+            output_config={"effort": "low"},
             messages=[{"role": "user", "content": prompt}],
         )
         raw = "".join(b.text for b in msg.content if b.type == "text").strip()

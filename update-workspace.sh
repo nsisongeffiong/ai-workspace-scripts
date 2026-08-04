@@ -257,11 +257,23 @@ if [[ -f "$ENV_FILE" ]]; then
     ok "  CLAUDE_MODEL -> claude-opus-4-7"
   fi
 
+  if grep -q "^CLAUDE_MODEL=claude-opus-4-7" "$ENV_FILE"; then
+    sed -i 's/^CLAUDE_MODEL=claude-opus-4-7/CLAUDE_MODEL=claude-opus-5/' "$ENV_FILE"
+    ENV_STATUS="updated"
+    ok "  CLAUDE_MODEL -> claude-opus-5"
+  fi
+
   # Update GPT_MODEL if on older version
   if grep -q "^GPT_MODEL=gpt-5\.4" "$ENV_FILE"; then
     sed -i 's/^GPT_MODEL=gpt-5\.4/GPT_MODEL=gpt-5.5/' "$ENV_FILE"
     ENV_STATUS="updated"
     ok "  GPT_MODEL -> gpt-5.5"
+  fi
+
+  if grep -q "^GPT_MODEL=gpt-5\.5$" "$ENV_FILE"; then
+    sed -i 's/^GPT_MODEL=gpt-5\.5$/GPT_MODEL=gpt-5.6-sol/' "$ENV_FILE"
+    ENV_STATUS="updated"
+    ok "  GPT_MODEL -> gpt-5.6-sol"
   fi
 
   # Update GEMINI_MODEL if on older version
@@ -271,6 +283,13 @@ if [[ -f "$ENV_FILE" ]]; then
     ok "  GEMINI_MODEL -> gemini-3.5-flash"
   fi
 
+  # Anchored: must not match gemini-3.5-flash-lite
+  if grep -q "^GEMINI_MODEL=gemini-3\.5-flash$" "$ENV_FILE"; then
+    sed -i 's/^GEMINI_MODEL=gemini-3\.5-flash$/GEMINI_MODEL=gemini-3.6-flash/' "$ENV_FILE"
+    ENV_STATUS="updated"
+    ok "  GEMINI_MODEL -> gemini-3.6-flash"
+  fi
+
   # Update MAX_OUTPUT_TOKENS from 16000 to 20000 if not already higher
   if grep -q "^MAX_OUTPUT_TOKENS=16000" "$ENV_FILE"; then
     sed -i 's/^MAX_OUTPUT_TOKENS=16000/MAX_OUTPUT_TOKENS=20000/' "$ENV_FILE"
@@ -278,12 +297,19 @@ if [[ -f "$ENV_FILE" ]]; then
     ok "  MAX_OUTPUT_TOKENS -> 20000"
   fi
 
+  # Opus 5: thinking shares the max_tokens budget with response text
+  if grep -q "^MAX_OUTPUT_TOKENS=20000" "$ENV_FILE"; then
+    sed -i 's/^MAX_OUTPUT_TOKENS=20000/MAX_OUTPUT_TOKENS=64000/' "$ENV_FILE"
+    ENV_STATUS="updated"
+    ok "  MAX_OUTPUT_TOKENS -> 64000"
+  fi
+
   # Add MAX_OUTPUT_TOKENS if missing entirely
   if ! grep -q "^MAX_OUTPUT_TOKENS=" "$ENV_FILE"; then
     echo "" >> "$ENV_FILE"
-    echo "MAX_OUTPUT_TOKENS=20000" >> "$ENV_FILE"
+    echo "MAX_OUTPUT_TOKENS=64000" >> "$ENV_FILE"
     ENV_STATUS="updated"
-    ok "  MAX_OUTPUT_TOKENS=20000 added"
+    ok "  MAX_OUTPUT_TOKENS=64000 added"
   fi
 else
   warn ".env not found at $ENV_FILE -- skipping (run setup-workspace.sh first)"
@@ -353,12 +379,12 @@ _check() {
   done
   printf "    %-18s -- %d/%d checks OK\n" "$label" "$found" "$total"
 }
-_check "orchestrate.py"        "$SHARED/orchestrate.py"          "extract_code_blocks" "install_dependencies" "from_stage" "setup_brand_assets" "claude-opus-4-7" "xhigh"
+_check "orchestrate.py"        "$SHARED/orchestrate.py"          "extract_code_blocks" "install_dependencies" "from_stage" "setup_brand_assets" "claude-opus-5" "xhigh"
 _check "claude_coder.md"      "$PROMPTS/claude_coder.md"        "OUTPUT RULES" "FILE MODIFICATION" "BRAND RULES"
 _check "claude_final.md"      "$PROMPTS/claude_final.md"        "OUTPUT RULES" "BRAND RULES"
 _check "gemini_validator.md"  "$PROMPTS/gemini_validator.md"    "SEVERITY" "CONFIDENCE" "CHAINED ATTACK PATHS" "COMPLIANCE CHECKLIST"
 _check "new-project.sh"       "$HOME/new-project.sh"            "\-\-brand" "\-\-lang" "submodule"
-_check ".env"                 "$ENV_FILE"                       "claude-opus-4-7" "gpt-5.5" "gemini-3.5-flash" "MAX_OUTPUT_TOKENS"
+_check ".env"                 "$ENV_FILE"                       "claude-opus-5" "gpt-5.6-sol" "gemini-3.6-flash" "MAX_OUTPUT_TOKENS"
 echo ""
 echo "  Backed up originals:"
 echo "    $PROMPTS/claude_coder.md.bak"

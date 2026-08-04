@@ -8,10 +8,10 @@ Every task runs through four stages automatically:
 
 | Stage | Model | Role |
 |-------|-------|------|
-| 1 | Claude Opus 4.7 | Initial implementation |
-| 2 | GPT-5.5 | Code quality & documentation review |
-| 3 | Gemini 3.5 Flash | Security & correctness audit |
-| 4 | Claude Opus 4.7 | Final synthesis & corrections |
+| 1 | Claude Opus 5 | Initial implementation |
+| 2 | GPT-5.6 Sol | Code quality & documentation review |
+| 3 | Gemini 3.6 Flash | Security & correctness audit |
+| 4 | Claude Opus 5 | Final synthesis & corrections |
 
 Each stage commits to a feature branch. You review the output and merge to main when satisfied.
 
