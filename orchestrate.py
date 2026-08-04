@@ -280,14 +280,20 @@ def git_commit(repo: Repo, message: str, paths: list) -> None:
        retry=retry_if_exception_type(anthropic.RateLimitError))
 def stage_1_claude_code(task: str) -> str:
     log.info("Stage 1 -- %s: initial implementation", CLAUDE_MODEL)
-    msg = claude_client.messages.create(
+    # Streaming is required, not optional: the SDK raises ValueError client-side
+    # for a non-streaming request whose estimated duration exceeds ~10 minutes,
+    # and MAX_OUTPUT_TOKENS at xhigh effort is comfortably over that line.
+    # get_final_message() returns the accumulated Message, so .content and
+    # .usage behave exactly as they did on messages.create().
+    with claude_client.messages.stream(
         model=CLAUDE_MODEL,
         max_tokens=MAX_OUTPUT_TOKENS,
         thinking={"type": "adaptive"},
         output_config={"effort": "xhigh"},
         system=load_prompt("claude_coder"),
         messages=[{"role": "user", "content": task}],
-    )
+    ) as stream:
+        msg = stream.get_final_message()
     text = "".join(b.text for b in msg.content if b.type == "text")
     log.info("  Tokens in/out: %d / %d", msg.usage.input_tokens, msg.usage.output_tokens)
     written = extract_code_blocks(text)
@@ -349,14 +355,20 @@ def stage_4_claude_final(stage1_output: str = "") -> list:
         "</review_content>\n\n"
         f"## Source Code\n{stage1_output if stage1_output else read_src()}"
     )
-    msg = claude_client.messages.create(
+    # Streaming is required, not optional: the SDK raises ValueError client-side
+    # for a non-streaming request whose estimated duration exceeds ~10 minutes,
+    # and MAX_OUTPUT_TOKENS at xhigh effort is comfortably over that line.
+    # get_final_message() returns the accumulated Message, so .content and
+    # .usage behave exactly as they did on messages.create().
+    with claude_client.messages.stream(
         model=CLAUDE_MODEL,
         max_tokens=MAX_OUTPUT_TOKENS,
         thinking={"type": "adaptive"},
         output_config={"effort": "xhigh"},
         system=load_prompt("claude_final"),
         messages=[{"role": "user", "content": context}],
-    )
+    ) as stream:
+        msg = stream.get_final_message()
     text = "".join(b.text for b in msg.content if b.type == "text")
     log.info("  Tokens in/out: %d / %d", msg.usage.input_tokens, msg.usage.output_tokens)
     write_file(PROJECT_ROOT / "reviews" / "final-review.md", text)
