@@ -33,8 +33,8 @@ from git import Repo, InvalidGitRepositoryError
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from models import (
-    ConfigError, GenerationRequest, RateLimited, build_client, describe, resolve_role,
-    validate_unique_models,
+    ConfigError, GenerationRequest, RateLimited, build_client, describe, migrate_env_file,
+    resolve_role, validate_unique_models,
 )
 
 logging.basicConfig(
@@ -57,6 +57,7 @@ def init_roles(from_stage: int) -> None:
     Config errors and missing keys fail here, before any branch is created or
     any model is called.
     """
+    migrate_project_env()
     ROLE_CONFIG.clear()
     CLIENTS.clear()
     for role in ("implementation", "quality", "security"):
@@ -70,6 +71,23 @@ def init_roles(from_stage: int) -> None:
     for role in needed:
         CLIENTS[role] = build_client(ROLE_CONFIG[role])
         log.info("Role %-14s %s", role + ":", describe(ROLE_CONFIG[role]))
+
+
+def migrate_project_env() -> None:
+    """Convert legacy model settings in the project's own .env to role settings.
+
+    Runs before roles are resolved, and reloads the file, so a project override
+    such as CLAUDE_MODEL keeps applying after the shared .env has moved to role
+    settings. The project .env is never committed, so nothing is staged.
+    """
+    env_path = PROJECT_ROOT / ".env"
+    if env_path.resolve() == (SHARED_DIR / ".env").resolve() or not env_path.is_file():
+        return
+    changes = migrate_env_file(env_path, fill_defaults=False)
+    if changes:
+        for c in changes:
+            log.info("  Project .env: %s", c)
+        load_dotenv(env_path, override=True)
 
 
 def _fmt(n) -> str:
@@ -114,6 +132,39 @@ def find_prompt(name: str):
                     log.info("  Prompt: using legacy name %s (rename to %s.md)", p, name)
                 return p
     return None
+
+
+def migrate_project_prompts(repo) -> None:
+    """Rename a project's provider-era prompt overrides to role names.
+
+    Runs at the start of each pipeline run, so a project converts itself the
+    first time it is used after the rename. Tracked files are moved with git and
+    committed on their own; edits not yet committed travel with the file.
+    If both names exist, nothing is touched: the role-named file already wins,
+    and deleting the other could lose work.
+    """
+    prompts = PROJECT_ROOT / "prompts"
+    moved = []
+    for new, old in LEGACY_PROMPT_NAMES.items():
+        old_path, new_path = prompts / f"{old}.md", prompts / f"{new}.md"
+        if not old_path.exists():
+            continue
+        if new_path.exists():
+            log.warning("  Prompt: both %s and %s exist in prompts/ -- %s is used; "
+                        "remove the other when you're done with it",
+                        old_path.name, new_path.name, new_path.name)
+            continue
+        old_rel = old_path.relative_to(PROJECT_ROOT).as_posix()
+        new_rel = new_path.relative_to(PROJECT_ROOT).as_posix()
+        if repo.git.ls_files("--", old_rel):
+            repo.git.mv(old_rel, new_rel)
+            moved.append(new_rel)
+        else:
+            old_path.rename(new_path)
+        log.info("  Prompt: renamed %s -> %s", old_path.name, new_path.name)
+    if moved:
+        repo.index.commit("chore: rename prompt files to role names")
+        log.info("  Git: chore: rename prompt files to role names")
 
 
 def load_prompt(name: str) -> str:
@@ -364,11 +415,16 @@ def install_dependencies() -> None:
             log.warning("  pip install failed:\n%s", r.stderr.strip())
 
 
-def git_commit(repo: Repo, message: str, paths: list) -> None:
+def git_commit(repo: Repo, message: str, paths: list, removed: list = ()) -> None:
     rel = [str(p.relative_to(PROJECT_ROOT)) for p in paths if p.exists()]
-    if not rel:
+    gone = [str(p.relative_to(PROJECT_ROOT)) for p in removed if not p.exists()]
+    gone = [g for g in gone if repo.git.ls_files("--", g)]  # only tracked files need staging
+    if not rel and not gone:
         return
-    repo.index.add(rel)
+    if rel:
+        repo.index.add(rel)
+    if gone:
+        repo.index.remove(gone)
     try:
         repo.index.commit(message)
         log.info("  Git: %s", message)
@@ -394,6 +450,48 @@ def stage_1_implement(task: str):
     return result.text, written
 
 
+# -- Review files ---------------------------------------------------------------
+#
+# Reviews are named after roles. Branches started before the rename hold
+# review-gpt.md / review-gemini.md, so Stage 4 falls back to those when the
+# role-named file is absent; a role-named file always wins. When a stage writes
+# its role-named review, the old-named file is removed in the same commit, so
+# each project converts itself on its next run.
+
+LEGACY_REVIEW_NAMES = {"quality": "review-gpt.md", "security": "review-gemini.md"}
+
+
+RETIRED_REVIEWS: list = []
+
+
+def review_path(role: str) -> Path:
+    return PROJECT_ROOT / "reviews" / f"review-{role}.md"
+
+
+def retire_legacy_review(role: str) -> None:
+    """Delete the old-named review once the role-named one has been written."""
+    legacy = PROJECT_ROOT / "reviews" / LEGACY_REVIEW_NAMES[role]
+    if legacy.exists():
+        legacy.unlink()
+        RETIRED_REVIEWS.append(legacy)
+        log.info("  Review: replaced %s with %s", legacy.name, review_path(role).name)
+
+
+def read_review(role: str) -> str:
+    path = review_path(role)
+    if not path.exists():
+        legacy = PROJECT_ROOT / "reviews" / LEGACY_REVIEW_NAMES[role]
+        if not legacy.exists():
+            stage = 2 if role == "quality" else 3
+            raise FileNotFoundError(
+                f"No {role} review found ({path.name} or {legacy.name}). "
+                f"Resume with --from-stage {stage} to regenerate it."
+            )
+        log.info("  Review: using legacy file %s for the %s review", legacy.name, role)
+        path = legacy
+    return path.read_text(encoding="utf-8")
+
+
 # -- Stage 2: quality review --------------------------------------------------
 
 def stage_2_quality_review() -> str:
@@ -405,7 +503,8 @@ def stage_2_quality_review() -> str:
         max_tokens=cfg.max_output_tokens,
         effort=cfg.reasoning_effort,
     ))
-    write_file(PROJECT_ROOT / "reviews" / "review-gpt.md", result.text)
+    write_file(review_path("quality"), result.text)
+    retire_legacy_review("quality")
     return result.text
 
 
@@ -420,7 +519,8 @@ def stage_3_security_audit() -> str:
         max_tokens=cfg.max_output_tokens,
         effort=cfg.reasoning_effort,
     ))
-    write_file(PROJECT_ROOT / "reviews" / "review-gemini.md", result.text)
+    write_file(review_path("security"), result.text)
+    retire_legacy_review("security")
     return result.text
 
 
@@ -429,10 +529,8 @@ def stage_3_security_audit() -> str:
 def stage_4_synthesize(stage1_output: str = "") -> list:
     cfg = ROLE_CONFIG["implementation"]
     log.info("Stage 4 -- %s: final synthesis", cfg.model)
-    # Review filenames are kept from the original three-provider layout so
-    # existing branches resume cleanly; they hold the quality and security reviews.
-    quality_fb  = (PROJECT_ROOT / "reviews" / "review-gpt.md").read_text(encoding="utf-8")
-    security_fb = (PROJECT_ROOT / "reviews" / "review-gemini.md").read_text(encoding="utf-8")
+    quality_fb  = read_review("quality")
+    security_fb = read_review("security")
     context = (
         "<review_content>\n"
         f"## Quality review ({ROLE_CONFIG['quality'].model})\n{quality_fb}\n\n"
@@ -624,7 +722,9 @@ def run(task: str, from_stage: int = 1) -> None:
         repo.git.checkout("-b", branch)
         log.info("Branch:  %s", branch)
 
+    migrate_project_prompts(repo)
     set_task_scope(task)
+    RETIRED_REVIEWS.clear()
 
     stage1_output = ""
     if from_stage <= 1:
@@ -640,7 +740,8 @@ def run(task: str, from_stage: int = 1) -> None:
 
     if from_stage <= 2 or from_stage == 3:
         git_commit(repo, f"review: {ROLE_CONFIG['quality'].model} and "
-                         f"{ROLE_CONFIG['security'].model} feedback", [PROJECT_ROOT / "reviews"])
+                         f"{ROLE_CONFIG['security'].model} feedback", [PROJECT_ROOT / "reviews"],
+                   removed=RETIRED_REVIEWS)
 
     if from_stage <= 4:
         stage4_written = stage_4_synthesize(stage1_output)

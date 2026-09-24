@@ -4,6 +4,21 @@ All notable changes to ai-workspace-scripts are recorded here.
 
 ---
 
+## [September 2026] — Role names for settings, reviews and prompts
+
+### Pipeline
+- Stage 2 and Stage 3 now write `reviews/review-quality.md` and `reviews/review-security.md` instead of `review-gpt.md` and `review-gemini.md`, so the filenames stay accurate whichever model runs each role.
+- Stage 4 reads the role-named file and falls back to the old name only when the new one is absent, so `--from-stage 3` or `--from-stage 4` on a branch started before this change still works. If neither file exists, Stage 4 stops and says which stage to resume from.
+- When Stage 2 or 3 writes its role-named review, the old-named file in that project is deleted and the deletion is included in the review commit, so each project converts itself on its next run. The old content stays in git history. Nothing is renamed by the updater, which does not touch project repos.
+- A project's own prompt overrides under the old names (`claude_coder.md`, `gpt_reviewer.md`, `gemini_validator.md`, `claude_final.md`) are renamed to `implementation.md`, `quality.md`, `security.md` and `synthesis.md` at the start of the project's next run. Tracked files are moved with git and committed as `chore: rename prompt files to role names`; uncommitted edits move with the file. If a project has both names for the same prompt, neither is touched and a warning says which one is used.
+- `CLAUDE_MODEL`, `GPT_MODEL` and `GEMINI_MODEL` are converted to role settings with the same models and the same effective defaults (implementation keeps `xhigh` effort and low pre-flight effort; quality keeps its 120-second timeout). The updater converts the shared `.env` and fills in any role it did not mention; a project's `.env` converts at the start of its next run and is reloaded, so project overrides keep applying. A legacy line in a file that already configures that role was being ignored and is removed. Only model lines change; keys, `MAX_OUTPUT_TOKENS` and other settings are untouched, and file permissions are preserved.
+
+### Scripts
+- The updater no longer changes model choices or token budgets. The rules that bumped `CLAUDE_MODEL`, `GPT_MODEL`, `GEMINI_MODEL` and `MAX_OUTPUT_TOKENS` to newer values are removed: with any provider allowed in any role, which model and budget to use is the user's setting. A workspace still on older models keeps them after conversion; change the role lines in `.env` and run the smoke test to move.
+- The updater's `.env` check now looks for the three role settings instead of specific model names.
+
+---
+
 ## [September 2026] — Task scope allowlist
 
 ### Pipeline

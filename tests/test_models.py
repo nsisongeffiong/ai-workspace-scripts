@@ -324,6 +324,7 @@ class TestParity(EnvTestCase):
             mock.patch.object(orchestrate, "extract_code_blocks", return_value=[]),
             mock.patch.object(orchestrate, "install_dependencies"),
             mock.patch.object(orchestrate, "write_file"),
+            mock.patch.object(orchestrate, "retire_legacy_review"),
             mock.patch.object(orchestrate, "generate",
                               orchestrate.generate.retry_with(wait=wait_none())),
         ]
@@ -355,7 +356,7 @@ class TestParity(EnvTestCase):
             max_output_tokens=16000, system_instruction="<security>"))
 
     def test_stage_4(self):
-        with mock.patch.object(Path, "read_text", return_value="REVIEW"):
+        with mock.patch.object(self.o, "read_review", return_value="REVIEW"):
             self.o.stage_4_synthesize("STAGE1")
         call = self.last("anthropic")
         self.assertEqual(call["system"], "<synthesis>")
@@ -484,6 +485,220 @@ class TestScope(ProjectTestCase):
     def test_fallback_unchanged_without_scope(self):
         written = self.o.extract_code_blocks("no code blocks here")
         self.assertEqual([w.relative_to(self.root).as_posix() for w in written], ["src/generated.py"])
+
+
+class TestEnvMigration(EnvTestCase):
+    SHARED = (
+        "ANTHROPIC_API_KEY=a\nOPENAI_API_KEY=o\nGOOGLE_API_KEY=g\n\n"
+        "CLAUDE_MODEL=claude-opus-5\nGPT_MODEL=gpt-5.6-sol\nGEMINI_MODEL=gemini-3.6-flash\n\n"
+        "# a comment\nMAX_OUTPUT_TOKENS=96000\nMAX_RETRIES=3\n"
+    )
+
+    def setUp(self):
+        super().setUp()
+        import tempfile
+        self.dir = Path(tempfile.mkdtemp())
+
+    def write(self, text, name=".env"):
+        f = self.dir / name
+        f.write_text(text)
+        f.chmod(0o600)
+        return f
+
+    def resolved(self, env_file):
+        from dotenv import dotenv_values
+        for var in ROLE_VARS:
+            os.environ.pop(var, None)
+        os.environ.update({k: v for k, v in dotenv_values(env_file).items() if v is not None})
+        out = {}
+        for r in models.ROLES:
+            cfg = models.resolve_role(r)
+            out[r] = {k: v for k, v in vars(cfg).items() if k != "legacy"}
+        return out
+
+    def test_shared_migration_is_behaviour_preserving(self):
+        f = self.write(self.SHARED)
+        before = self.resolved(f)
+        changes = models.migrate_env_file(f, fill_defaults=True)
+        self.assertEqual(len(changes), 3)
+        text = f.read_text()
+        for legacy in ("CLAUDE_MODEL", "GPT_MODEL", "GEMINI_MODEL"):
+            self.assertNotIn(legacy, text)
+        self.assertIn("MAX_OUTPUT_TOKENS=96000", text)
+        self.assertIn("ANTHROPIC_API_KEY=a", text)
+        self.assertIn("# a comment", text)
+        self.assertEqual(oct(f.stat().st_mode & 0o777), oct(0o600))
+        after = self.resolved(f)
+        self.assertEqual(before, after)
+        self.assertTrue(all(not models.resolve_role(r).legacy for r in models.ROLES))
+
+    def test_every_non_model_line_kept_verbatim(self):
+        original = (
+            'ANTHROPIC_API_KEY=sk-ant-abc123\n'
+            'OPENAI_API_KEY="sk-quoted"\n'
+            "export GOOGLE_API_KEY='AIza-single'\n"
+            'DEEPSEEK_API_KEY=sk-extra\n'
+            '# CLAUDE_MODEL=commented-out\n'
+            'CLAUDE_MODEL=claude-opus-5\n'
+            'MAX_OUTPUT_TOKENS=96000\n'
+            '\n'
+            'LOG_LEVEL=INFO\n'
+        )
+        f = self.write(original)
+        models.migrate_env_file(f, fill_defaults=True)
+        after = f.read_text().splitlines()
+        kept = [ln for ln in original.splitlines() if not ln.startswith("CLAUDE_MODEL=")]
+        for ln in kept:
+            self.assertIn(ln, after)
+
+    def test_failed_write_leaves_original_and_no_temp_file(self):
+        f = self.write(self.SHARED)
+        with mock.patch.object(Path, "replace", side_effect=OSError("disk full")):
+            with self.assertRaises(OSError):
+                models.migrate_env_file(f, fill_defaults=True)
+        self.assertEqual(f.read_text(), self.SHARED)
+        self.assertEqual(sorted(p.name for p in self.dir.iterdir()), [".env"])
+
+    def test_idempotent(self):
+        f = self.write(self.SHARED)
+        models.migrate_env_file(f, fill_defaults=True)
+        first = f.read_text()
+        self.assertEqual(models.migrate_env_file(f, fill_defaults=True), [])
+        self.assertEqual(f.read_text(), first)
+
+    def test_shared_fills_missing_roles(self):
+        f = self.write("ANTHROPIC_API_KEY=a\nCLAUDE_MODEL=claude-x\n")
+        models.migrate_env_file(f, fill_defaults=True)
+        text = f.read_text()
+        self.assertIn("IMPLEMENTATION_MODEL=claude-x", text)
+        self.assertIn("QUALITY_MODEL=gpt-5.6-sol", text)
+        self.assertIn("SECURITY_MODEL=gemini-3.6-flash", text)
+
+    def test_project_converts_only_what_it_has(self):
+        f = self.write("# Project-local .env\nCLAUDE_MODEL=claude-y\n# GPT_MODEL=commented\nLOG_LEVEL=DEBUG\n")
+        changes = models.migrate_env_file(f, fill_defaults=False)
+        self.assertEqual(len(changes), 1)
+        text = f.read_text()
+        self.assertIn("IMPLEMENTATION_PROVIDER=anthropic\nIMPLEMENTATION_MODEL=claude-y", text)
+        self.assertNotIn("QUALITY_", text)
+        self.assertIn("# GPT_MODEL=commented", text)
+        self.assertIn("LOG_LEVEL=DEBUG", text)
+
+    def test_dead_legacy_line_removed_when_role_configured(self):
+        f = self.write("QUALITY_PROVIDER=openai\nQUALITY_MODEL=gpt-z\nGPT_MODEL=gpt-old\n")
+        changes = models.migrate_env_file(f, fill_defaults=False)
+        self.assertIn("removed unused", changes[0])
+        self.assertNotIn("GPT_MODEL", f.read_text())
+        self.assertIn("QUALITY_MODEL=gpt-z", f.read_text())
+
+    def test_project_env_migrated_and_reloaded_before_resolution(self):
+        import orchestrate
+        project = self.dir / "project"
+        project.mkdir()
+        (project / ".env").write_text("CLAUDE_MODEL=claude-project\n")
+        os.environ.update(IMPLEMENTATION_PROVIDER="anthropic", IMPLEMENTATION_MODEL="claude-shared")
+        with mock.patch.object(orchestrate, "PROJECT_ROOT", project):
+            orchestrate.migrate_project_env()
+        self.assertEqual(models.resolve_role("implementation").model, "claude-project")
+
+
+class TestProjectPromptMigration(ProjectTestCase):
+    def repo(self):
+        from git import Repo
+        repo = Repo.init(self.root)
+        with repo.config_writer() as cw:
+            cw.set_value("user", "name", "t")
+            cw.set_value("user", "email", "t@example.com")
+        return repo
+
+    def test_tracked_prompt_renamed_and_committed(self):
+        repo = self.repo()
+        self.put("prompts/claude_coder.md", "{brand_context}\ncustom")
+        repo.index.add(["prompts/claude_coder.md"])
+        repo.index.commit("scaffold")
+        self.put("prompts/claude_coder.md", "{brand_context}\ncustom, edited")  # uncommitted edit
+        self.o.migrate_project_prompts(repo)
+        self.assertEqual(repo.git.ls_files().splitlines(), ["prompts/implementation.md"])
+        self.assertEqual(repo.head.commit.message, "chore: rename prompt files to role names")
+        self.assertEqual((self.root / "prompts/implementation.md").read_text(),
+                         "{brand_context}\ncustom, edited")
+        self.assertFalse((self.root / "prompts/claude_coder.md").exists())
+
+    def test_untracked_prompt_renamed_without_commit(self):
+        repo = self.repo()
+        self.put("README", "x")
+        repo.index.add(["README"])
+        repo.index.commit("init")
+        self.put("prompts/gpt_reviewer.md", "q")
+        self.o.migrate_project_prompts(repo)
+        self.assertTrue((self.root / "prompts/quality.md").exists())
+        self.assertEqual(repo.head.commit.message, "init")
+
+    def test_both_names_left_alone(self):
+        repo = self.repo()
+        self.put("prompts/claude_final.md", "old")
+        self.put("prompts/synthesis.md", "new")
+        self.o.migrate_project_prompts(repo)
+        self.assertEqual((self.root / "prompts/claude_final.md").read_text(), "old")
+        self.assertEqual(self.o.load_prompt("synthesis"), "new")
+
+    def test_nothing_to_do(self):
+        repo = self.repo()
+        self.put("README", "x")
+        repo.index.add(["README"])
+        repo.index.commit("init")
+        self.o.migrate_project_prompts(repo)
+        self.assertEqual(repo.head.commit.message, "init")
+
+
+class TestReviewFiles(ProjectTestCase):
+    def test_role_names(self):
+        self.assertEqual(self.o.review_path("quality").name, "review-quality.md")
+        self.assertEqual(self.o.review_path("security").name, "review-security.md")
+
+    def test_new_name_wins_over_legacy(self):
+        self.put("reviews/review-gpt.md", "old")
+        self.put("reviews/review-quality.md", "new")
+        self.assertEqual(self.o.read_review("quality"), "new")
+
+    def test_legacy_fallback_for_old_branches(self):
+        self.put("reviews/review-gemini.md", "old security")
+        self.assertEqual(self.o.read_review("security"), "old security")
+
+    def test_new_review_retires_legacy_file_in_the_commit(self):
+        from git import Repo
+        repo = Repo.init(self.root)
+        with repo.config_writer() as cw:
+            cw.set_value("user", "name", "t")
+            cw.set_value("user", "email", "t@example.com")
+        self.put("reviews/review-gpt.md", "old")
+        repo.index.add(["reviews/review-gpt.md"])
+        repo.index.commit("old run")
+        self.o.RETIRED_REVIEWS.clear()
+        self.o.write_file(self.o.review_path("quality"), "new")
+        self.o.retire_legacy_review("quality")
+        self.o.retire_legacy_review("security")  # nothing to retire: no-op
+        self.o.git_commit(repo, "review", [self.root / "reviews"], removed=self.o.RETIRED_REVIEWS)
+        tracked = repo.git.ls_files().splitlines()
+        self.assertEqual(tracked, ["reviews/review-quality.md"])
+        self.assertFalse(repo.is_dirty(untracked_files=True))
+
+    def test_untracked_legacy_file_is_just_deleted(self):
+        from git import Repo
+        repo = Repo.init(self.root)
+        with repo.config_writer() as cw:
+            cw.set_value("user", "name", "t")
+            cw.set_value("user", "email", "t@example.com")
+        self.put("reviews/review-gemini.md", "old")
+        self.o.RETIRED_REVIEWS.clear()
+        self.o.write_file(self.o.review_path("security"), "new")
+        self.o.retire_legacy_review("security")
+        self.o.git_commit(repo, "review", [self.root / "reviews"], removed=self.o.RETIRED_REVIEWS)
+        self.assertEqual(repo.git.ls_files().splitlines(), ["reviews/review-security.md"])
+
+    def test_missing_review_says_where_to_resume(self):
+        with self.assertRaisesRegex(FileNotFoundError, "--from-stage 2"):
+            self.o.read_review("quality")
 
 
 if __name__ == "__main__":

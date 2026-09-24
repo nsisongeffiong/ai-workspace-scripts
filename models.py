@@ -202,6 +202,93 @@ def validate_unique_models(configs: dict) -> None:
         seen[key] = role
 
 
+# -- .env migration -------------------------------------------------------------
+
+def legacy_role_lines(role: str, model: str) -> list:
+    """Role settings equivalent to what the legacy fallback does for this role."""
+    legacy = LEGACY[role]
+    prefix = role.upper()
+    lines = [f"{prefix}_PROVIDER={legacy['provider']}", f"{prefix}_MODEL={model}"]
+    if legacy["reasoning_effort"]:
+        lines.append(f"{prefix}_REASONING_EFFORT={legacy['reasoning_effort']}")
+    if legacy["preflight_effort"]:
+        lines.append(f"{prefix}_PREFLIGHT_EFFORT={legacy['preflight_effort']}")
+    if legacy["timeout"]:
+        lines.append(f"{prefix}_TIMEOUT_SECONDS={int(legacy['timeout'])}")
+    return lines
+
+
+def migrate_env_file(path, fill_defaults: bool) -> list:
+    """Replace CLAUDE_MODEL / GPT_MODEL / GEMINI_MODEL with role settings.
+
+    Each legacy line is replaced in place by the equivalent role settings, so
+    the pipeline behaves exactly as before. A role that is already configured
+    in this file is left alone, and its legacy line (which was being ignored)
+    is removed. With fill_defaults (the shared .env), roles with no legacy line
+    are written out with the default model so the file is fully role-based;
+    project .env files only convert lines they actually have.
+
+    Returns human-readable descriptions of the changes; an empty list means the
+    file was not modified. Safe to run repeatedly.
+    """
+    import re as _re
+    import tempfile
+    from pathlib import Path as _Path
+
+    path = _Path(path)
+    lines = path.read_text(encoding="utf-8").splitlines()
+
+    def assigned(name):
+        pat = _re.compile(rf"^\s*(?:export\s+)?{name}\s*=")
+        return [i for i, ln in enumerate(lines) if pat.match(ln)]
+
+    changes, replace_at, append = [], {}, []
+    for role in ROLES:
+        prefix = role.upper()
+        legacy_var = LEGACY[role]["model_env"]
+        legacy_idx = assigned(legacy_var)
+        configured = assigned(f"{prefix}_PROVIDER") or assigned(f"{prefix}_MODEL")
+        if configured:
+            for i in legacy_idx:
+                replace_at[i] = []
+                changes.append(f"removed unused {lines[i].strip()} ({role} role already configured)")
+            continue
+        if legacy_idx:
+            model = lines[legacy_idx[-1]].split("=", 1)[1].strip().strip('"').strip("'")
+            model = model or LEGACY[role]["model"]
+            block = legacy_role_lines(role, model)
+            replace_at[legacy_idx[-1]] = block
+            for i in legacy_idx[:-1]:
+                replace_at[i] = []
+            changes.append(f"{legacy_var}={model} -> {prefix}_PROVIDER/{prefix}_MODEL")
+        elif fill_defaults:
+            append.extend(legacy_role_lines(role, LEGACY[role]["model"]))
+            changes.append(f"added {prefix}_* with default model {LEGACY[role]['model']}")
+
+    if not changes:
+        return []
+    out = []
+    for i, ln in enumerate(lines):
+        out.extend(replace_at.get(i, [ln]))
+    if append:
+        out.extend([""] + append)
+    # Write to a private temp file beside the original, then swap it in with a
+    # single rename: the original is never left half-written, and the temp copy
+    # (which holds API keys) is removed if anything fails.
+    mode = path.stat().st_mode & 0o777
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=".env.", suffix=".tmp")
+    tmp_path = _Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as tmp:
+            tmp.write("\n".join(out) + "\n")
+        tmp_path.chmod(mode)
+        tmp_path.replace(path)
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
+    return changes
+
+
 # -- Requests and results -----------------------------------------------------
 
 @dataclass(frozen=True)

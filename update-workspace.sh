@@ -285,72 +285,31 @@ security issues. Same format: location, what, fix.
 PROMPT
 ok "security.md updated"
 
-# ── Update .env model and token budget ───────────────────────────────────────
-info "Updating .env model and token settings..."
+# ── Convert .env to role settings ─────────────────────────────────────────────
+# The updater never changes which models or token budgets you use -- those are
+# yours to set in .env. It only converts legacy setting names.
+info "Checking .env settings..."
 ENV_FILE="$SHARED/.env"
 ENV_STATUS="no changes needed"
 
 if [[ -f "$ENV_FILE" ]]; then
-  # Update CLAUDE_MODEL if it's set to an older version
-  if grep -q "^CLAUDE_MODEL=claude-opus-4-6" "$ENV_FILE"; then
-    sed -i 's/^CLAUDE_MODEL=claude-opus-4-6/CLAUDE_MODEL=claude-opus-4-7/' "$ENV_FILE"
-    ENV_STATUS="updated"
-    ok "  CLAUDE_MODEL -> claude-opus-4-7"
-  fi
-
-  if grep -q "^CLAUDE_MODEL=claude-opus-4-7" "$ENV_FILE"; then
-    sed -i 's/^CLAUDE_MODEL=claude-opus-4-7/CLAUDE_MODEL=claude-opus-5/' "$ENV_FILE"
-    ENV_STATUS="updated"
-    ok "  CLAUDE_MODEL -> claude-opus-5"
-  fi
-
-  # Update GPT_MODEL if on older version
-  if grep -q "^GPT_MODEL=gpt-5\.4" "$ENV_FILE"; then
-    sed -i 's/^GPT_MODEL=gpt-5\.4/GPT_MODEL=gpt-5.5/' "$ENV_FILE"
-    ENV_STATUS="updated"
-    ok "  GPT_MODEL -> gpt-5.5"
-  fi
-
-  if grep -q "^GPT_MODEL=gpt-5\.5$" "$ENV_FILE"; then
-    sed -i 's/^GPT_MODEL=gpt-5\.5$/GPT_MODEL=gpt-5.6-sol/' "$ENV_FILE"
-    ENV_STATUS="updated"
-    ok "  GPT_MODEL -> gpt-5.6-sol"
-  fi
-
-  # Update GEMINI_MODEL if on older version
-  if grep -q "^GEMINI_MODEL=gemini-2\.5-flash" "$ENV_FILE"; then
-    sed -i 's/^GEMINI_MODEL=gemini-2\.5-flash/GEMINI_MODEL=gemini-3.5-flash/' "$ENV_FILE"
-    ENV_STATUS="updated"
-    ok "  GEMINI_MODEL -> gemini-3.5-flash"
-  fi
-
-  # Anchored: must not match gemini-3.5-flash-lite
-  if grep -q "^GEMINI_MODEL=gemini-3\.5-flash$" "$ENV_FILE"; then
-    sed -i 's/^GEMINI_MODEL=gemini-3\.5-flash$/GEMINI_MODEL=gemini-3.6-flash/' "$ENV_FILE"
-    ENV_STATUS="updated"
-    ok "  GEMINI_MODEL -> gemini-3.6-flash"
-  fi
-
-  # Update MAX_OUTPUT_TOKENS from 16000 to 20000 if not already higher
-  if grep -q "^MAX_OUTPUT_TOKENS=16000" "$ENV_FILE"; then
-    sed -i 's/^MAX_OUTPUT_TOKENS=16000/MAX_OUTPUT_TOKENS=20000/' "$ENV_FILE"
-    ENV_STATUS="updated"
-    ok "  MAX_OUTPUT_TOKENS -> 20000"
-  fi
-
-  # Opus 5: thinking shares the max_tokens budget with response text
-  if grep -q "^MAX_OUTPUT_TOKENS=20000" "$ENV_FILE"; then
-    sed -i 's/^MAX_OUTPUT_TOKENS=20000/MAX_OUTPUT_TOKENS=64000/' "$ENV_FILE"
-    ENV_STATUS="updated"
-    ok "  MAX_OUTPUT_TOKENS -> 64000"
-  fi
-
-  # Add MAX_OUTPUT_TOKENS if missing entirely
-  if ! grep -q "^MAX_OUTPUT_TOKENS=" "$ENV_FILE"; then
-    echo "" >> "$ENV_FILE"
-    echo "MAX_OUTPUT_TOKENS=64000" >> "$ENV_FILE"
-    ENV_STATUS="updated"
-    ok "  MAX_OUTPUT_TOKENS=64000 added"
+  # Convert CLAUDE_MODEL / GPT_MODEL / GEMINI_MODEL to role settings, keeping
+  # each model value as it is. Only those model lines change -- API keys and
+  # all other settings are left exactly as they are. Projects' own .env files
+  # convert on their next pipeline run.
+  if ENV_CHANGES=$(cd "$SHARED" && "$PY" -c '
+import sys
+from models import migrate_env_file
+for change in migrate_env_file(".env", fill_defaults=True):
+    print(change)
+' 2>&1); then
+    if [[ -n "$ENV_CHANGES" ]]; then
+      while IFS= read -r line; do ok "  $line"; done <<< "$ENV_CHANGES"
+      ENV_STATUS="updated"
+    fi
+  else
+    warn "  Could not convert .env to role settings -- legacy settings still work"
+    warn "  $ENV_CHANGES"
   fi
 else
   warn ".env not found at $ENV_FILE -- skipping (run setup-workspace.sh first)"
@@ -429,7 +388,7 @@ _check "synthesis.md"         "$PROMPTS/synthesis.md"           "OUTPUT RULES" "
 _check "security.md"          "$PROMPTS/security.md"            "SEVERITY" "CONFIDENCE" "CHAINED ATTACK PATHS" "COMPLIANCE CHECKLIST"
 _check "quality.md"           "$PROMPTS/quality.md"             "Documentation Gaps" "Code Quality Issues"
 _check "new-project.sh"       "$HOME/new-project.sh"            "\-\-brand" "\-\-lang" "submodule"
-_check ".env"                 "$ENV_FILE"                       "claude-opus-5" "gpt-5.6-sol" "gemini-3.6-flash" "MAX_OUTPUT_TOKENS"
+_check ".env"                 "$ENV_FILE"                       "^IMPLEMENTATION_PROVIDER=" "^QUALITY_PROVIDER=" "^SECURITY_PROVIDER="
 echo ""
 echo "  Backed up originals:"
 echo "    $PROMPTS/implementation.md.bak"

@@ -206,6 +206,8 @@ chmod +x update-workspace.sh
 bash update-workspace.sh
 ```
 
+The updater refreshes the pipeline code and shared prompts. It never changes which models or token budgets your `.env` uses, and never touches your API keys.
+
 ---
 
 ## Workspace layout
@@ -269,7 +271,7 @@ Always set `PROVIDER` and `MODEL` together, and give each role a different model
 python3 ~/ai-workspace/.shared/smoke_test.py
 ```
 
-Workspaces set up before role config existed keep working: if a role isn't configured, the pipeline falls back to `CLAUDE_MODEL`, `GPT_MODEL` and `GEMINI_MODEL`. The same role settings in a project's own `.env` override the shared ones for that project.
+The same role settings in a project's own `.env` override the shared ones for that project. Older `CLAUDE_MODEL`, `GPT_MODEL` and `GEMINI_MODEL` settings are converted to role settings automatically, keeping the same models: the updater converts the shared `.env`, and each project's `.env` converts on its next run. Until then the pipeline still reads them.
 
 ---
 
