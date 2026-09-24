@@ -94,5 +94,3 @@ Both agents handle the same class of tasks. Pick based on preference or try both
 ## A note on unreviewed changes
 
 Any change made via a terminal agent — Claude Code, Codex, or otherwise — bypasses the multi-model review the pipeline provides. This is expected and often fine for small targeted fixes. For larger changes, or when you want confidence before merging, run the pipeline against the result.
-
-The Code Review Harness (separate project, `github.com/nsisongeffiong`) is being built specifically to audit this kind of out-of-band work.

@@ -6,12 +6,14 @@ A multi-model agentic development pipeline that combines three leading AI models
 
 Every task runs through four stages automatically:
 
-| Stage | Model | Role |
-|-------|-------|------|
-| 1 | Claude Opus 5 | Initial implementation |
-| 2 | GPT-5.6 Sol | Code quality & documentation review |
-| 3 | Gemini 3.6 Flash | Security & correctness audit |
-| 4 | Claude Opus 5 | Final synthesis & corrections |
+| Stage | Role | Default model | Job |
+|-------|------|---------------|-----|
+| 1 | Implementation | Claude Opus 5 | Initial implementation |
+| 2 | Quality | GPT-5.6 Sol | Code quality & documentation review |
+| 3 | Security | Gemini 3.6 Flash | Security & correctness audit |
+| 4 | Synthesis | Claude Opus 5 | Final synthesis & corrections |
+
+Synthesis uses the same model as implementation. Each role's model is set in `.env`, so any role can run on another provider. See [Change a role's model](#change-a-roles-model).
 
 Each stage commits to a feature branch. You review the output and merge to main when satisfied.
 
@@ -100,8 +102,8 @@ The script will:
 - Install all pipeline dependencies
 - Install **Claude Code** and **Codex CLI** as terminal agents
 - Export your API keys to `~/.bashrc` so both agents work immediately
-- Download `orchestrate.py` from this repo
-- Run a smoke test to confirm all three APIs are reachable
+- Download `orchestrate.py`, `models.py` and `smoke_test.py` from this repo
+- Run a smoke test to confirm every pipeline role can reach its model
 
 The script is safe to re-run — completed phases are skipped automatically.
 
@@ -199,11 +201,13 @@ bash update-workspace.sh
     .env                  <- API keys (gitignored, chmod 600)
     .venv/                <- shared Python virtual environment
     orchestrate.py        <- pipeline logic (downloaded from this repo)
+    models.py             <- provider adapters and role config (downloaded from this repo)
+    smoke_test.py         <- checks each role can reach its model
     prompts/
-      claude_coder.md     <- Stage 1 system prompt
-      gpt_reviewer.md     <- Stage 2 system prompt
-      gemini_validator.md <- Stage 3 system prompt
-      claude_final.md     <- Stage 4 system prompt
+      implementation.md   <- Stage 1 system prompt
+      quality.md          <- Stage 2 system prompt
+      security.md         <- Stage 3 system prompt
+      synthesis.md        <- Stage 4 system prompt
   projects/
     my-project/           <- your project lives here
       src/                <- source code
@@ -218,7 +222,7 @@ bash update-workspace.sh
 ## Customise prompts for a specific project
 
 ```bash
-cp ~/ai-workspace/.shared/prompts/claude_coder.md ~/ai-workspace/projects/my-project/prompts/
+cp ~/ai-workspace/.shared/prompts/implementation.md ~/ai-workspace/projects/my-project/prompts/
 # Edit the copy to add project-specific rules
 ```
 
@@ -229,6 +233,28 @@ cp ~/ai-workspace/.shared/prompts/claude_coder.md ~/ai-workspace/projects/my-pro
 ```bash
 nano ~/ai-workspace/.shared/.env
 ```
+
+---
+
+## Change a role's model
+
+Each role is configured in `~/ai-workspace/.shared/.env` with a provider and a model. Supported providers are `anthropic`, `openai`, `openai_compatible` and `gemini`. For example, to run the security audit on any OpenAI-compatible endpoint:
+
+```bash
+SECURITY_PROVIDER=openai_compatible
+SECURITY_MODEL=<model-id>
+SECURITY_BASE_URL=https://<provider-endpoint>/v1
+SECURITY_API_KEY_ENV=MY_PROVIDER_API_KEY
+MY_PROVIDER_API_KEY=...
+```
+
+Always set `PROVIDER` and `MODEL` together, and give each role a different model; the pipeline stops if two roles share one. Optional per-role settings (`_REASONING_EFFORT`, `_MAX_OUTPUT_TOKENS`, `_TIMEOUT_SECONDS`, `_TOKEN_PARAM`) are listed in `.env.example`. Reasoning effort values are passed to the provider unchanged, so use a value the model accepts. Run the smoke test after any change:
+
+```bash
+python3 ~/ai-workspace/.shared/smoke_test.py
+```
+
+Workspaces set up before role config existed keep working: if a role isn't configured, the pipeline falls back to `CLAUDE_MODEL`, `GPT_MODEL` and `GEMINI_MODEL`. The same role settings in a project's own `.env` override the shared ones for that project.
 
 ---
 
@@ -283,6 +309,8 @@ git push --set-upstream origin "$(git branch --show-current)"
 | `new-project.sh` | Create a new pipeline project |
 | `update-workspace.sh` | Apply latest improvements to existing workspace |
 | `orchestrate.py` | Pipeline logic — downloaded by setup, kept in sync with this repo |
+| `models.py` | Provider adapters and role configuration — downloaded alongside `orchestrate.py` |
+| `smoke_test.py` | Checks each role can reach its configured model |
 | `TERMINAL_AGENTS.md` | Guide to Claude Code and Codex CLI terminal agents |
 
 ---

@@ -4,6 +4,36 @@ All notable changes to ai-workspace-scripts are recorded here.
 
 ---
 
+## [September 2026] — Model-agnostic roles
+
+### Pipeline
+- Stages now run on three configurable roles instead of fixed providers: implementation (Stages 1 and 4, plus brand pre-flight), quality (Stage 2) and security (Stage 3). Each role takes a provider and model from `.env`.
+- New `models.py` holds all provider SDK calls, with adapters for `anthropic`, `openai`, `openai_compatible` and `gemini`. SDKs are imported only when a role uses them, and clients are built after argument parsing, so a missing key for an unused provider no longer blocks startup. `orchestrate.py` no longer imports any provider SDK.
+- Existing `.env` files keep working unchanged: an unconfigured role falls back to `CLAUDE_MODEL`, `GPT_MODEL` and `GEMINI_MODEL` with the original defaults. Setting only one of a role's `PROVIDER` and `MODEL` is an error.
+- Offline tests pin the exact requests each stage sent before this change; the default configuration reproduces them.
+- Retries now cover rate limits on every provider, including Stage 3, which previously had no retry. Other errors are not retried, and the original error is raised after the last attempt.
+- Brand pre-flight calls now stream like Stages 1 and 4. An empty distillation response now falls back to the full `BRAND.md` instead of writing an empty `BRAND_TOKENS.md`.
+- A warning is logged when any stage hits its output token ceiling.
+- Each role must use a different model. The pipeline and the smoke test stop with a clear error if two roles share a model ID.
+- Commit messages and the Stage 4 review headings use role names instead of provider names. Review files keep their existing names (`review-gpt.md`, `review-gemini.md`) so in-progress branches resume cleanly.
+
+### Prompts
+- Stage prompts are renamed after roles: `claude_coder.md` → `implementation.md`, `gpt_reviewer.md` → `quality.md`, `gemini_validator.md` → `security.md`, `claude_final.md` → `synthesis.md`.
+- The orchestrator still reads the old names. Lookup order is project new name, project legacy name, shared new name, shared legacy name, so existing project overrides keep winning over the shared copy.
+- The updater renames the shared prompts in place. A shared prompt that only exists under its old name is renamed, keeping any customisation; if both names exist, the old file is set aside as `.legacy.bak`. Project-level overrides are not touched.
+- `new-project.sh` writes brand overrides under the new names.
+
+### Scripts
+- `smoke_test.py` is now a repo file rather than a heredoc, and tests each role through the same adapters as the pipeline. Setup and the updater both download it, which closes the gap where the updater never refreshed it.
+- The updater downloads `orchestrate.py`, `models.py` and `smoke_test.py` into a staging directory, compiles them together, and only then replaces the installed copies. A failed download or syntax error keeps the current working set.
+- New installs write role settings to `.env` and `.env.example`. The updater does not rewrite an existing `.env`.
+- Provider names removed from the Stage 4 prompt text.
+
+### Docs
+- README model table now shows roles and default models, with a section on changing a role's model.
+
+---
+
 ## [August 2026] — Model migration: Opus 5, GPT-5.6 Sol, Gemini 3.6 Flash
 
 ### Models

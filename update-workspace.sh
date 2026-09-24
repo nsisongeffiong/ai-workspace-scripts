@@ -45,14 +45,35 @@ if [[ ! -d "$SHARED" ]]; then
   exit 1
 fi
 
-# ── Update orchestrate.py ─────────────────────────────────────────────────────
-info "Updating orchestrate.py..."
-OLD_SUM=$(md5sum "$SHARED/orchestrate.py" 2>/dev/null | cut -d' ' -f1 || echo "none")
-curl -fsSL "$REPO/orchestrate.py" -o "$SHARED/orchestrate.py" \
-  || { warn "Failed to download orchestrate.py -- skipping"; }
-chmod +x "$SHARED/orchestrate.py"
-NEW_SUM=$(md5sum "$SHARED/orchestrate.py" | cut -d' ' -f1)
-[[ "$OLD_SUM" != "$NEW_SUM" ]] && ORCHESTRATE_STATUS="changed" || ORCHESTRATE_STATUS="already latest"
+# ── Update pipeline modules ───────────────────────────────────────────────────
+# orchestrate.py imports models.py, so the three files are downloaded to a
+# staging dir, compiled together, and only then moved into place. A failed
+# download or syntax error leaves the current working set untouched.
+info "Updating pipeline modules (orchestrate.py, models.py, smoke_test.py)..."
+PIPELINE_FILES=(orchestrate.py models.py smoke_test.py)
+STAGE_DIR=$(mktemp -d)
+MODULES_STATUS="already latest"
+STAGE_OK=1
+for f in "${PIPELINE_FILES[@]}"; do
+  curl -fsSL "$REPO/$f" -o "$STAGE_DIR/$f" || { warn "Failed to download $f"; STAGE_OK=0; }
+done
+PY="$SHARED/.venv/bin/python3"
+[[ -x "$PY" ]] || PY="python3"
+if [[ "$STAGE_OK" == "1" ]] && "$PY" -m py_compile "${PIPELINE_FILES[@]/#/$STAGE_DIR/}"; then
+  for f in "${PIPELINE_FILES[@]}"; do
+    if ! cmp -s "$STAGE_DIR/$f" "$SHARED/$f"; then
+      MODULES_STATUS="changed"
+    fi
+  done
+  for f in "${PIPELINE_FILES[@]}"; do
+    mv "$STAGE_DIR/$f" "$SHARED/$f"
+  done
+  chmod +x "$SHARED/orchestrate.py" "$SHARED/smoke_test.py"
+else
+  warn "Pipeline modules not updated -- download or syntax check failed; current files kept"
+  MODULES_STATUS="update failed -- current files kept"
+fi
+rm -rf "$STAGE_DIR"
 
 # ── Update new-project.sh ─────────────────────────────────────────────────────
 info "Updating new-project.sh..."
@@ -63,15 +84,35 @@ chmod +x "$HOME/new-project.sh"
 NEW_SUM=$(md5sum "$HOME/new-project.sh" | cut -d' ' -f1)
 [[ "$OLD_SUM" != "$NEW_SUM" ]] && NEW_PROJECT_STATUS="changed" || NEW_PROJECT_STATUS="already latest"
 
+# ── Migrate shared prompts to role names ──────────────────────────────────────
+# Provider-era names become role names. If only the old file exists it is
+# renamed, which keeps any customisation (quality.md is never rewritten below).
+# If both exist, the old file is set aside as .legacy.bak. Safe to re-run.
+# Project-level overrides under projects/*/prompts/ are left as they are; the
+# orchestrator still reads their old names.
+for pair in claude_coder:implementation gpt_reviewer:quality \
+            gemini_validator:security claude_final:synthesis; do
+  old="${pair%%:*}"; new="${pair##*:}"
+  if [[ -f "$PROMPTS/$old.md" ]]; then
+    if [[ -f "$PROMPTS/$new.md" ]]; then
+      mv "$PROMPTS/$old.md" "$PROMPTS/$old.md.legacy.bak"
+      ok "  $old.md set aside as $old.md.legacy.bak ($new.md already present)"
+    else
+      mv "$PROMPTS/$old.md" "$PROMPTS/$new.md"
+      ok "  $old.md -> $new.md"
+    fi
+  fi
+done
+
 # ── Back up and update shared prompts ─────────────────────────────────────────
 info "Backing up existing prompts..."
-cp "$PROMPTS/claude_coder.md"       "$PROMPTS/claude_coder.md.bak"       2>/dev/null || true
-cp "$PROMPTS/claude_final.md"       "$PROMPTS/claude_final.md.bak"       2>/dev/null || true
-cp "$PROMPTS/gemini_validator.md"   "$PROMPTS/gemini_validator.md.bak"   2>/dev/null || true
+cp "$PROMPTS/implementation.md" "$PROMPTS/implementation.md.bak" 2>/dev/null || true
+cp "$PROMPTS/synthesis.md"      "$PROMPTS/synthesis.md.bak"      2>/dev/null || true
+cp "$PROMPTS/security.md"       "$PROMPTS/security.md.bak"       2>/dev/null || true
 ok "Backups saved as .bak files"
 
-info "Updating claude_coder.md..."
-cat > "$PROMPTS/claude_coder.md" << 'PROMPT'
+info "Updating implementation.md..."
+cat > "$PROMPTS/implementation.md" << 'PROMPT'
 You are a senior software engineer writing production-quality code.
 
 RESPONSIBILITIES:
@@ -141,15 +182,15 @@ General web:
 - All admin routes must verify authentication before any data operation
 - Never expose secret keys with public/client-side prefixes
 PROMPT
-ok "claude_coder.md updated"
+ok "implementation.md updated"
 
-info "Updating claude_final.md..."
-cat > "$PROMPTS/claude_final.md" << 'PROMPT'
+info "Updating synthesis.md..."
+cat > "$PROMPTS/synthesis.md" << 'PROMPT'
 You are the lead engineer performing a final synthesis review before merge.
 
 You have been provided:
-  1. A code quality and documentation review (GPT)
-  2. A security and correctness audit (Gemini)
+  1. A code quality and documentation review
+  2. A security and correctness audit
   3. The current source code
 
 Your task:
@@ -173,10 +214,10 @@ BRAND RULES -- CRITICAL (when brand context is provided above):
   REJECT the reviewer suggestion and keep the brand colours
 - Brand fidelity is non-negotiable -- it takes priority over reviewer preferences
 PROMPT
-ok "claude_final.md updated"
+ok "synthesis.md updated"
 
-info "Updating gemini_validator.md..."
-cat > "$PROMPTS/gemini_validator.md" << 'PROMPT'
+info "Updating security.md..."
+cat > "$PROMPTS/security.md" << 'PROMPT'
 You are an independent security and correctness auditor performing a fresh adversarial review.
 You have not seen any prior review. Approach the code as an attacker who can also read code fluently.
 
@@ -242,7 +283,7 @@ Quick pass -- flag only genuine failures, not absences of boilerplate:
 Logic bugs, unhandled edge cases, race conditions, or incorrect assumptions that are not
 security issues. Same format: location, what, fix.
 PROMPT
-ok "gemini_validator.md updated"
+ok "security.md updated"
 
 # ── Update .env model and token budget ───────────────────────────────────────
 info "Updating .env model and token settings..."
@@ -364,10 +405,11 @@ echo "  |  WORKSPACE IMPROVEMENTS APPLIED                             |"
 echo "  +==============================================================+"
 echo -e "${RESET}"
 echo "  Files updated:"
-echo "    orchestrate.py   -- $ORCHESTRATE_STATUS"
+echo "    pipeline modules -- $MODULES_STATUS"
 echo "    new-project.sh   -- $NEW_PROJECT_STATUS"
-echo "    claude_coder.md  -- updated"
-echo "    claude_final.md  -- updated"
+echo "    implementation.md -- updated"
+echo "    synthesis.md     -- updated"
+echo "    security.md      -- updated"
 echo "    .env             -- $ENV_STATUS"
 echo ""
 echo "  Verification:"
@@ -379,15 +421,18 @@ _check() {
   done
   printf "    %-18s -- %d/%d checks OK\n" "$label" "$found" "$total"
 }
-_check "orchestrate.py"        "$SHARED/orchestrate.py"          "extract_code_blocks" "install_dependencies" "from_stage" "setup_brand_assets" "claude-opus-5" "xhigh"
-_check "claude_coder.md"      "$PROMPTS/claude_coder.md"        "OUTPUT RULES" "FILE MODIFICATION" "BRAND RULES"
-_check "claude_final.md"      "$PROMPTS/claude_final.md"        "OUTPUT RULES" "BRAND RULES"
-_check "gemini_validator.md"  "$PROMPTS/gemini_validator.md"    "SEVERITY" "CONFIDENCE" "CHAINED ATTACK PATHS" "COMPLIANCE CHECKLIST"
+_check "orchestrate.py"        "$SHARED/orchestrate.py"          "extract_code_blocks" "install_dependencies" "from_stage" "setup_brand_assets" "init_roles"
+_check "models.py"            "$SHARED/models.py"               "resolve_role" "build_client" "openai_compatible" "RateLimited"
+_check "smoke_test.py"        "$SHARED/smoke_test.py"           "resolve_role" "build_client"
+_check "implementation.md"    "$PROMPTS/implementation.md"      "OUTPUT RULES" "FILE MODIFICATION" "BRAND RULES"
+_check "synthesis.md"         "$PROMPTS/synthesis.md"           "OUTPUT RULES" "BRAND RULES"
+_check "security.md"          "$PROMPTS/security.md"            "SEVERITY" "CONFIDENCE" "CHAINED ATTACK PATHS" "COMPLIANCE CHECKLIST"
+_check "quality.md"           "$PROMPTS/quality.md"             "Documentation Gaps" "Code Quality Issues"
 _check "new-project.sh"       "$HOME/new-project.sh"            "\-\-brand" "\-\-lang" "submodule"
 _check ".env"                 "$ENV_FILE"                       "claude-opus-5" "gpt-5.6-sol" "gemini-3.6-flash" "MAX_OUTPUT_TOKENS"
 echo ""
 echo "  Backed up originals:"
-echo "    $PROMPTS/claude_coder.md.bak"
-echo "    $PROMPTS/claude_final.md.bak"
-echo "    $PROMPTS/gemini_validator.md.bak"
+echo "    $PROMPTS/implementation.md.bak"
+echo "    $PROMPTS/synthesis.md.bak"
+echo "    $PROMPTS/security.md.bak"
 echo ""

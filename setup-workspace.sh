@@ -240,9 +240,17 @@ ANTHROPIC_API_KEY=${ANTHROPIC_KEY}
 OPENAI_API_KEY=${OPENAI_KEY}
 GOOGLE_API_KEY=${GOOGLE_KEY}
 
-CLAUDE_MODEL=claude-opus-5
-GPT_MODEL=gpt-5.6-sol
-GEMINI_MODEL=gemini-3.6-flash
+IMPLEMENTATION_PROVIDER=anthropic
+IMPLEMENTATION_MODEL=claude-opus-5
+IMPLEMENTATION_REASONING_EFFORT=xhigh
+IMPLEMENTATION_PREFLIGHT_EFFORT=low
+
+QUALITY_PROVIDER=openai
+QUALITY_MODEL=gpt-5.6-sol
+QUALITY_TIMEOUT_SECONDS=120
+
+SECURITY_PROVIDER=gemini
+SECURITY_MODEL=gemini-3.6-flash
 
 MAX_OUTPUT_TOKENS=64000
 MAX_RETRIES=3
@@ -257,9 +265,32 @@ ANTHROPIC_API_KEY=sk-ant-...
 OPENAI_API_KEY=sk-...
 GOOGLE_API_KEY=AIza...
 
-CLAUDE_MODEL=claude-opus-5
-GPT_MODEL=gpt-5.6-sol
-GEMINI_MODEL=gemini-3.6-flash
+# Pipeline roles. Each role takes any supported provider and model:
+#   anthropic | openai | openai_compatible | gemini
+# Set PROVIDER and MODEL together. Optional per role:
+#   _MAX_OUTPUT_TOKENS, _REASONING_EFFORT (passed to the provider unchanged;
+#   omit for the model default), _TIMEOUT_SECONDS, _BASE_URL, _API_KEY_ENV.
+# Implementation runs Stages 1 and 4 plus brand pre-flight; quality runs
+# Stage 2; security runs Stage 3.
+IMPLEMENTATION_PROVIDER=anthropic
+IMPLEMENTATION_MODEL=claude-opus-5
+IMPLEMENTATION_REASONING_EFFORT=xhigh
+IMPLEMENTATION_PREFLIGHT_EFFORT=low
+
+QUALITY_PROVIDER=openai
+QUALITY_MODEL=gpt-5.6-sol
+QUALITY_TIMEOUT_SECONDS=120
+
+SECURITY_PROVIDER=gemini
+SECURITY_MODEL=gemini-3.6-flash
+
+# Example: any OpenAI-compatible endpoint for a role
+# SECURITY_PROVIDER=openai_compatible
+# SECURITY_MODEL=<model-id>
+# SECURITY_BASE_URL=https://<provider-endpoint>/v1
+# SECURITY_API_KEY_ENV=<PROVIDER>_API_KEY
+# SECURITY_TOKEN_PARAM=max_tokens        # or max_completion_tokens
+# <PROVIDER>_API_KEY=...
 
 # Token budget for Stage 1 and Stage 4 (code generation stages).
 # On Opus 5 thinking is on by default and max_tokens is a hard cap on TOTAL
@@ -303,7 +334,7 @@ GITIGNORE
 phase_shared_prompts() {
   step "PHASE 5 -- Shared System Prompt Templates"
 
-  cat > "$SHARED_DIR/prompts/claude_coder.md" << 'PROMPT'
+  cat > "$SHARED_DIR/prompts/implementation.md" << 'PROMPT'
 You are a senior software engineer writing production-quality code.
 
 RESPONSIBILITIES:
@@ -374,7 +405,7 @@ General web:
 - Never expose secret keys with public/client-side prefixes
 PROMPT
 
-  cat > "$SHARED_DIR/prompts/gpt_reviewer.md" << 'PROMPT'
+  cat > "$SHARED_DIR/prompts/quality.md" << 'PROMPT'
 You are a senior code reviewer and technical writer.
 
 Given the source code provided, produce a structured review:
@@ -399,7 +430,7 @@ RULES:
 - Priority: correctness > security > performance > style
 PROMPT
 
-  cat > "$SHARED_DIR/prompts/gemini_validator.md" << 'PROMPT'
+  cat > "$SHARED_DIR/prompts/security.md" << 'PROMPT'
 You are an independent security and correctness auditor performing a fresh adversarial review.
 You have not seen any prior review. Approach the code as an attacker who can also read code fluently.
 
@@ -466,12 +497,12 @@ Logic bugs, unhandled edge cases, race conditions, or incorrect assumptions that
 security issues. Same format: location, what, fix.
 PROMPT
 
-  cat > "$SHARED_DIR/prompts/claude_final.md" << 'PROMPT'
+  cat > "$SHARED_DIR/prompts/synthesis.md" << 'PROMPT'
 You are the lead engineer performing a final synthesis review before merge.
 
 You have been provided:
-  1. A code quality and documentation review (GPT)
-  2. A security and correctness audit (Gemini)
+  1. A code quality and documentation review
+  2. A security and correctness audit
   3. The current source code
 
 Your task:
@@ -600,104 +631,17 @@ PYEOF
 phase_write_shared_scripts() {
   step "PHASE 8 -- Writing Shared Scripts"
 
-  # ── orchestrate.py -- downloaded from repo to ensure latest version ────────
-  info "Downloading orchestrate.py from repo..."
-  curl -fsSL "https://raw.githubusercontent.com/nsisongeffiong/ai-workspace-scripts/main/orchestrate.py" \
-    -o "$SHARED_DIR/orchestrate.py" \
-    || { error "Failed to download orchestrate.py"; exit 1; }
-
-  # ── smoke_test.py ────────────────────────────────────────────────────────────
-  cat > "$SHARED_DIR/smoke_test.py" << 'PYEOF'
-#!/usr/bin/env python3
-"""
-Smoke test -- verifies connectivity to all three cloud providers.
-Run: python3 ~/.ai-workspace/.shared/smoke_test.py
-"""
-import os, sys
-from pathlib import Path
-from dotenv import load_dotenv
-
-load_dotenv(Path(__file__).parent / ".env")
-
-CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-opus-5")
-GPT_MODEL    = os.getenv("GPT_MODEL",    "gpt-5.6-sol")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
-
-
-def check(name, fn):
-    try:
-        result = fn()
-        if not result:
-            raise ValueError("empty response -- token ceiling too low for thinking/reasoning")
-        print(f"  [OK]   {name}: {result[:60]}")
-        return True
-    except Exception as e:
-        print(f"  [FAIL] {name}: {e}")
-        return False
-
-
-def test_anthropic():
-    import anthropic
-    # Thinking is on by default from Opus 5 and shares the max_tokens budget
-    # with the response text, so a tight ceiling returns no text at all.
-    r = anthropic.Anthropic().messages.create(
-        model=CLAUDE_MODEL, max_tokens=2000,
-        output_config={"effort": "low"},
-        messages=[{"role": "user", "content": "Reply with only: OK"}]
-    )
-    # Never index content[0] -- it may be a thinking block, which has no .text
-    return "".join(b.text for b in r.content if b.type == "text").strip()
-
-
-def test_openai():
-    import openai
-    # Reasoning tokens are consumed before any visible output is emitted
-    r = openai.OpenAI().chat.completions.create(
-        model=GPT_MODEL, max_completion_tokens=2000,
-        messages=[{"role": "user", "content": "Reply with only: OK"}]
-    )
-    return (r.choices[0].message.content or "").strip()
-
-
-def test_google():
-    from google import genai
-    client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
-    r = client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents="Reply with only: OK",
-        config=genai.types.GenerateContentConfig(max_output_tokens=2000),
-    )
-    # Do not fall back to "OK" -- that reports a pass on an empty response
-    return (r.text or "").strip()
-
-
-print(f"\nSmoke Test -- Cloud API Connectivity\n")
-print(f"  Claude: {CLAUDE_MODEL}")
-print(f"  GPT:    {GPT_MODEL}")
-print(f"  Gemini: {GEMINI_MODEL}\n")
-
-results = [
-    check(f"Anthropic ({CLAUDE_MODEL})", test_anthropic),
-    check(f"OpenAI    ({GPT_MODEL})",    test_openai),
-    check(f"Google    ({GEMINI_MODEL})", test_google),
-]
-
-print()
-if all(results):
-    print("All providers reachable. Pipeline is ready.\n")
-    sys.exit(0)
-else:
-    print("One or more providers failed.")
-    print("Check keys in ~/.ai-workspace/.shared/.env")
-    print("Common causes:")
-    print("  Anthropic: insufficient credits -- add funds at console.anthropic.com")
-    print("  OpenAI:    check key validity at platform.openai.com")
-    print("  Google:    check key at aistudio.google.com\n")
-    sys.exit(1)
-PYEOF
+  # ── Pipeline modules -- downloaded from repo to ensure latest version ─────
+  local f
+  for f in orchestrate.py models.py smoke_test.py; do
+    info "Downloading $f from repo..."
+    curl -fsSL "https://raw.githubusercontent.com/nsisongeffiong/ai-workspace-scripts/main/$f" \
+      -o "$SHARED_DIR/$f" \
+      || { error "Failed to download $f"; exit 1; }
+  done
 
   chmod +x "$SHARED_DIR/orchestrate.py" "$SHARED_DIR/smoke_test.py"
-  success "orchestrate.py and smoke_test.py written"
+  success "orchestrate.py, models.py and smoke_test.py written"
 }
 
 # =============================================================================
@@ -709,7 +653,7 @@ phase_smoke_test() {
   source "$SHARED_DIR/.venv/bin/activate"
   echo ""
   if python3 "$SHARED_DIR/smoke_test.py"; then
-    success "All three APIs reachable. Pipeline is ready."
+    success "All pipeline roles reachable. Pipeline is ready."
   else
     warn "One or more providers failed -- see output above."
     warn "Fix the issue then re-run: python3 $SHARED_DIR/smoke_test.py"
@@ -741,7 +685,7 @@ phase_summary() {
   echo -e "    ${CYAN}nano ~/ai-workspace/.shared/.env${RESET}"
   echo ""
   echo -e "  ${BOLD}Override a prompt for one project:${RESET}"
-  echo -e "    ${CYAN}cp ~/ai-workspace/.shared/prompts/claude_coder.md <project>/prompts/${RESET}"
+  echo -e "    ${CYAN}cp ~/ai-workspace/.shared/prompts/implementation.md <project>/prompts/${RESET}"
   echo ""
   warn "Reload your shell: source ~/.bashrc"
   echo ""

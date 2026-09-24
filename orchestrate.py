@@ -2,12 +2,13 @@
 """
 Multi-model pipeline orchestrator -- cloud edition.
 
-Stage 1: Claude (CLAUDE_MODEL) -- initial implementation
-Stage 2: GPT    (GPT_MODEL)    -- code quality & documentation review
-Stage 3: Gemini (GEMINI_MODEL) -- security & correctness audit
-Stage 4: Claude (CLAUDE_MODEL) -- final synthesis and corrections
+Stage 1: implementation role -- initial implementation
+Stage 2: quality role        -- code quality & documentation review
+Stage 3: security role       -- security & correctness audit
+Stage 4: implementation role -- final synthesis and corrections
 
-Models are configured via environment variables in .env (see .env.example).
+Each role's provider and model are configured in .env (see .env.example and
+models.py). Provider SDK calls live in models.py; this file never imports them.
 
 Usage:
   PROJECT_ROOT=/path/to/project python orchestrate.py "task description"
@@ -28,12 +29,13 @@ SHARED_DIR = Path(__file__).parent
 load_dotenv(SHARED_DIR / ".env")
 load_dotenv(PROJECT_ROOT / ".env", override=True)
 
-import anthropic
-import openai
-from google import genai as google_genai
-from google.genai import types as genai_types
 from git import Repo, InvalidGitRepositoryError
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+
+from models import (
+    ConfigError, GenerationRequest, RateLimited, build_client, describe, resolve_role,
+    validate_unique_models,
+)
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
@@ -42,27 +44,76 @@ logging.basicConfig(
 )
 log = logging.getLogger("pipeline")
 
-CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-opus-5")
-GPT_MODEL    = os.getenv("GPT_MODEL",    "gpt-5.6-sol")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
-MAX_RETRIES       = int(os.getenv("MAX_RETRIES", "3"))
-MAX_OUTPUT_TOKENS = int(os.getenv("MAX_OUTPUT_TOKENS", "64000"))
+MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
+
+# Populated by init_roles() at the start of run(), after CLI parsing.
+ROLE_CONFIG: dict = {}
+CLIENTS: dict = {}
 
 
-def _require_env(key: str) -> str:
-    val = os.getenv(key)
-    if not val:
-        raise EnvironmentError(
-            f"Missing environment variable: {key}\n"
-            f"Check {SHARED_DIR}/.env or {PROJECT_ROOT}/.env"
-        )
-    return val
+def init_roles(from_stage: int) -> None:
+    """Resolve all role configs, then build clients for the stages that will run.
+
+    Config errors and missing keys fail here, before any branch is created or
+    any model is called.
+    """
+    ROLE_CONFIG.clear()
+    CLIENTS.clear()
+    for role in ("implementation", "quality", "security"):
+        ROLE_CONFIG[role] = resolve_role(role)
+    validate_unique_models(ROLE_CONFIG)
+    needed = ["implementation"]
+    if from_stage <= 2:
+        needed.append("quality")
+    if from_stage <= 3:
+        needed.append("security")
+    for role in needed:
+        CLIENTS[role] = build_client(ROLE_CONFIG[role])
+        log.info("Role %-14s %s", role + ":", describe(ROLE_CONFIG[role]))
 
 
-# Initialise clients
-claude_client = anthropic.Anthropic(api_key=_require_env("ANTHROPIC_API_KEY"))
-openai_client = openai.OpenAI(api_key=_require_env("OPENAI_API_KEY"))
-gemini_client = google_genai.Client(api_key=_require_env("GOOGLE_API_KEY"))
+def _fmt(n) -> str:
+    return "?" if n is None else str(n)
+
+
+@retry(stop=stop_after_attempt(MAX_RETRIES),
+       wait=wait_exponential(multiplier=2, min=4, max=60),
+       retry=retry_if_exception_type(RateLimited),
+       reraise=True)
+def generate(role: str, request: GenerationRequest):
+    """Call a role's model. Only rate limits are retried; nothing else happens here."""
+    result = CLIENTS[role].generate(request)
+    log.info("  Tokens in/out: %s / %s", _fmt(result.input_tokens), _fmt(result.output_tokens))
+    if result.truncated:
+        log.warning("  Output hit the %s token ceiling and may be incomplete", request.max_tokens)
+    return result
+
+
+# Prompt files are named after roles. The provider-era names are still read so
+# existing workspaces and project-level overrides keep working.
+LEGACY_PROMPT_NAMES = {
+    "implementation": "claude_coder",
+    "quality":        "gpt_reviewer",
+    "security":       "gemini_validator",
+    "synthesis":      "claude_final",
+}
+
+
+def find_prompt(name: str):
+    """Return the prompt file to use for a stage, or None.
+
+    Lookup order: project new name, project legacy name, shared new name,
+    shared legacy name -- so a project override always beats the shared copy.
+    """
+    names = [name] + ([LEGACY_PROMPT_NAMES[name]] if name in LEGACY_PROMPT_NAMES else [])
+    for search in [PROJECT_ROOT / "prompts", SHARED_DIR / "prompts"]:
+        for n in names:
+            p = search / f"{n}.md"
+            if p.exists():
+                if n != name:
+                    log.info("  Prompt: using legacy name %s (rename to %s.md)", p, name)
+                return p
+    return None
 
 
 def load_prompt(name: str) -> str:
@@ -72,25 +123,24 @@ def load_prompt(name: str) -> str:
     Prompts opt in to brand context by including {brand_context} in their text.
     This keeps token usage proportional to what each stage actually needs.
     """
-    for search in [PROJECT_ROOT / "prompts", SHARED_DIR / "prompts"]:
-        p = search / f"{name}.md"
-        if p.exists():
-            text = p.read_text(encoding="utf-8")
-            if "{brand_context}" in text:
-                # Prefer distilled tokens file -- falls back to full brand guide
-                tokens_path = PROJECT_ROOT / "prompts" / "BRAND_TOKENS.md"
-                brand_path  = PROJECT_ROOT / "prompts" / "BRAND.md"
-                if tokens_path.exists():
-                    brand = tokens_path.read_text(encoding="utf-8")
-                    log.debug("  Brand context: using BRAND_TOKENS.md (%d chars)", len(brand))
-                elif brand_path.exists():
-                    brand = brand_path.read_text(encoding="utf-8")
-                    log.debug("  Brand context: using BRAND.md (%d chars)", len(brand))
-                else:
-                    brand = ""
-                text = text.replace("{brand_context}", brand)
-            return text
-    raise FileNotFoundError(f"Prompt '{name}.md' not found")
+    p = find_prompt(name)
+    if p is None:
+        raise FileNotFoundError(f"Prompt '{name}.md' not found")
+    text = p.read_text(encoding="utf-8")
+    if "{brand_context}" in text:
+        # Prefer distilled tokens file -- falls back to full brand guide
+        tokens_path = PROJECT_ROOT / "prompts" / "BRAND_TOKENS.md"
+        brand_path  = PROJECT_ROOT / "prompts" / "BRAND.md"
+        if tokens_path.exists():
+            brand = tokens_path.read_text(encoding="utf-8")
+            log.debug("  Brand context: using BRAND_TOKENS.md (%d chars)", len(brand))
+        elif brand_path.exists():
+            brand = brand_path.read_text(encoding="utf-8")
+            log.debug("  Brand context: using BRAND.md (%d chars)", len(brand))
+        else:
+            brand = ""
+        text = text.replace("{brand_context}", brand)
+    return text
 
 
 def check_brand_budget() -> None:
@@ -105,7 +155,7 @@ def check_brand_budget() -> None:
             "Brand context is ~%d tokens -- this leaves only ~%d tokens for code output. "
             "Consider splitting your task into smaller focused pipeline runs, or trimming "
             "the brand guide to essential design tokens only (colours, fonts, spacing).",
-            tokens_approx, MAX_OUTPUT_TOKENS - tokens_approx
+            tokens_approx, ROLE_CONFIG["implementation"].max_output_tokens - tokens_approx
         )
 
 def read_src() -> str:
@@ -273,113 +323,85 @@ def git_commit(repo: Repo, message: str, paths: list) -> None:
         raise
 
 
-# -- Stage 1: Claude codes ----------------------------------------------------
+# -- Stage 1: implementation ------------------------------------------------
 
-@retry(stop=stop_after_attempt(MAX_RETRIES),
-       wait=wait_exponential(multiplier=2, min=4, max=60),
-       retry=retry_if_exception_type(anthropic.RateLimitError))
-def stage_1_claude_code(task: str) -> str:
-    log.info("Stage 1 -- %s: initial implementation", CLAUDE_MODEL)
-    # Streaming is required, not optional: the SDK raises ValueError client-side
-    # for a non-streaming request whose estimated duration exceeds ~10 minutes,
-    # and MAX_OUTPUT_TOKENS at xhigh effort is comfortably over that line.
-    # get_final_message() returns the accumulated Message, so .content and
-    # .usage behave exactly as they did on messages.create().
-    with claude_client.messages.stream(
-        model=CLAUDE_MODEL,
-        max_tokens=MAX_OUTPUT_TOKENS,
-        thinking={"type": "adaptive"},
-        output_config={"effort": "xhigh"},
-        system=load_prompt("claude_coder"),
-        messages=[{"role": "user", "content": task}],
-    ) as stream:
-        msg = stream.get_final_message()
-    text = "".join(b.text for b in msg.content if b.type == "text")
-    log.info("  Tokens in/out: %d / %d", msg.usage.input_tokens, msg.usage.output_tokens)
-    written = extract_code_blocks(text)
+def stage_1_implement(task: str):
+    cfg = ROLE_CONFIG["implementation"]
+    log.info("Stage 1 -- %s: initial implementation", cfg.model)
+    result = generate("implementation", GenerationRequest(
+        system=load_prompt("implementation"),
+        user=task,
+        max_tokens=cfg.max_output_tokens,
+        effort=cfg.reasoning_effort,
+        thinking=True,  # honoured by the anthropic adapter; ignored by others
+    ))
+    written = extract_code_blocks(result.text)
     install_dependencies()
-    return text, written
+    return result.text, written
 
 
-# -- Stage 2: GPT review -----------------------------------------------------
+# -- Stage 2: quality review --------------------------------------------------
 
-@retry(stop=stop_after_attempt(MAX_RETRIES),
-       wait=wait_exponential(multiplier=2, min=4, max=60),
-       retry=retry_if_exception_type(openai.RateLimitError))
-def stage_2_gpt_review() -> str:
-    log.info("Stage 2 -- %s: code quality & documentation review", GPT_MODEL)
-    resp = openai_client.chat.completions.create(
-        model=GPT_MODEL,
-        max_completion_tokens=16000,
-        timeout=120,
-        messages=[
-            {"role": "system", "content": load_prompt("gpt_reviewer")},
-            {"role": "user",   "content": read_src()},
-        ],
-    )
-    review = resp.choices[0].message.content
-    write_file(PROJECT_ROOT / "reviews" / "review-gpt.md", review)
-    return review
+def stage_2_quality_review() -> str:
+    cfg = ROLE_CONFIG["quality"]
+    log.info("Stage 2 -- %s: code quality & documentation review", cfg.model)
+    result = generate("quality", GenerationRequest(
+        system=load_prompt("quality"),
+        user=read_src(),
+        max_tokens=cfg.max_output_tokens,
+        effort=cfg.reasoning_effort,
+    ))
+    write_file(PROJECT_ROOT / "reviews" / "review-gpt.md", result.text)
+    return result.text
 
 
-# -- Stage 3: Gemini validates ------------------------------------------------
+# -- Stage 3: security audit --------------------------------------------------
 
-def stage_3_gemini_validate() -> str:
-    log.info("Stage 3 -- %s: security & correctness audit", GEMINI_MODEL)
-    resp = gemini_client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=read_src(),
-        config=genai_types.GenerateContentConfig(
-            system_instruction=load_prompt("gemini_validator"),
-            max_output_tokens=16000,
-        ),
-    )
-    review = resp.text
-    write_file(PROJECT_ROOT / "reviews" / "review-gemini.md", review)
-    return review
+def stage_3_security_audit() -> str:
+    cfg = ROLE_CONFIG["security"]
+    log.info("Stage 3 -- %s: security & correctness audit", cfg.model)
+    result = generate("security", GenerationRequest(
+        system=load_prompt("security"),
+        user=read_src(),
+        max_tokens=cfg.max_output_tokens,
+        effort=cfg.reasoning_effort,
+    ))
+    write_file(PROJECT_ROOT / "reviews" / "review-gemini.md", result.text)
+    return result.text
 
 
-# -- Stage 4: Claude synthesises ----------------------------------------------
+# -- Stage 4: synthesis -------------------------------------------------------
 
-@retry(stop=stop_after_attempt(MAX_RETRIES),
-       wait=wait_exponential(multiplier=2, min=4, max=60),
-       retry=retry_if_exception_type(anthropic.RateLimitError))
-def stage_4_claude_final(stage1_output: str = "") -> list:
-    log.info("Stage 4 -- %s: final synthesis", CLAUDE_MODEL)
-    gpt_fb    = (PROJECT_ROOT / "reviews" / "review-gpt.md").read_text(encoding="utf-8")
-    gemini_fb = (PROJECT_ROOT / "reviews" / "review-gemini.md").read_text(encoding="utf-8")
+def stage_4_synthesize(stage1_output: str = "") -> list:
+    cfg = ROLE_CONFIG["implementation"]
+    log.info("Stage 4 -- %s: final synthesis", cfg.model)
+    # Review filenames are kept from the original three-provider layout so
+    # existing branches resume cleanly; they hold the quality and security reviews.
+    quality_fb  = (PROJECT_ROOT / "reviews" / "review-gpt.md").read_text(encoding="utf-8")
+    security_fb = (PROJECT_ROOT / "reviews" / "review-gemini.md").read_text(encoding="utf-8")
     context = (
         "<review_content>\n"
-        f"## {GPT_MODEL} Review\n{gpt_fb}\n\n"
-        f"## {GEMINI_MODEL} Review\n{gemini_fb}\n"
+        f"## Quality review ({ROLE_CONFIG['quality'].model})\n{quality_fb}\n\n"
+        f"## Security review ({ROLE_CONFIG['security'].model})\n{security_fb}\n"
         "</review_content>\n\n"
         f"## Source Code\n{stage1_output if stage1_output else read_src()}"
     )
-    # Streaming is required, not optional: the SDK raises ValueError client-side
-    # for a non-streaming request whose estimated duration exceeds ~10 minutes,
-    # and MAX_OUTPUT_TOKENS at xhigh effort is comfortably over that line.
-    # get_final_message() returns the accumulated Message, so .content and
-    # .usage behave exactly as they did on messages.create().
-    with claude_client.messages.stream(
-        model=CLAUDE_MODEL,
-        max_tokens=MAX_OUTPUT_TOKENS,
-        thinking={"type": "adaptive"},
-        output_config={"effort": "xhigh"},
-        system=load_prompt("claude_final"),
-        messages=[{"role": "user", "content": context}],
-    ) as stream:
-        msg = stream.get_final_message()
-    text = "".join(b.text for b in msg.content if b.type == "text")
-    log.info("  Tokens in/out: %d / %d", msg.usage.input_tokens, msg.usage.output_tokens)
-    write_file(PROJECT_ROOT / "reviews" / "final-review.md", text)
-    written = extract_code_blocks(text)
+    result = generate("implementation", GenerationRequest(
+        system=load_prompt("synthesis"),
+        user=context,
+        max_tokens=cfg.max_output_tokens,
+        effort=cfg.reasoning_effort,
+        thinking=True,  # honoured by the anthropic adapter; ignored by others
+    ))
+    write_file(PROJECT_ROOT / "reviews" / "final-review.md", result.text)
+    written = extract_code_blocks(result.text)
     install_dependencies()
     return written
 
 
 
 def distil_brand_tokens() -> None:
-    """Use Claude to distil BRAND.md into a lean BRAND_TOKENS.md.
+    """Use the implementation role to distil BRAND.md into a lean BRAND_TOKENS.md.
 
     Only runs when BRAND.md exists and BRAND_TOKENS.md does not yet exist.
     The distilled file contains only the tokens needed for consistent UI output:
@@ -426,13 +448,14 @@ BRAND GUIDE:
 Return ONLY the BRAND_TOKENS.md content -- no preamble, no explanation."""
 
     try:
-        msg = claude_client.messages.create(
-            model=CLAUDE_MODEL,
-            max_tokens=8000,
-            output_config={"effort": "low"},
-            messages=[{"role": "user", "content": prompt}],
-        )
-        tokens_content = "".join(b.text for b in msg.content if b.type == "text").strip()
+        # Pre-flight calls are not retried; failures degrade to the full BRAND.md.
+        result = CLIENTS["implementation"].generate(GenerationRequest(
+            system=None, user=prompt, max_tokens=8000,
+            effort=ROLE_CONFIG["implementation"].preflight_effort,
+        ))
+        tokens_content = result.text.strip()
+        if not tokens_content:
+            raise ValueError("empty response")
         tokens_path.write_text(tokens_content, encoding="utf-8")
         distilled_tokens = len(tokens_content) // 4
         saved = brand_tokens - distilled_tokens
@@ -447,10 +470,10 @@ Return ONLY the BRAND_TOKENS.md content -- no preamble, no explanation."""
 # -- Pre-pipeline: brand asset placement -------------------------------------
 
 def setup_brand_assets() -> None:
-    """Ask Claude where brand assets should go, then copy them there.
+    """Ask the implementation role where brand assets should go, then copy them.
 
     Only runs when a non-empty brand/ submodule exists.
-    Claude inspects the project structure and returns a JSON placement map,
+    The model inspects the project structure and returns a JSON placement map,
     so this works for any language or framework without hardcoded rules.
     """
     import json, shutil
@@ -492,13 +515,11 @@ def setup_brand_assets() -> None:
 
     log.info("Pre-flight: determining brand asset placement...")
     try:
-        msg = claude_client.messages.create(
-            model=CLAUDE_MODEL,
-            max_tokens=4000,
-            output_config={"effort": "low"},
-            messages=[{"role": "user", "content": prompt}],
-        )
-        raw = "".join(b.text for b in msg.content if b.type == "text").strip()
+        result = CLIENTS["implementation"].generate(GenerationRequest(
+            system=None, user=prompt, max_tokens=4000,
+            effort=ROLE_CONFIG["implementation"].preflight_effort,
+        ))
+        raw = result.text.strip()
         placement = json.loads(raw)
     except Exception as e:
         log.warning("  Brand placement check failed (%s) -- skipping asset copy", e)
@@ -529,6 +550,12 @@ def run(task: str, from_stage: int = 1) -> None:
     log.info("Task:    %s", task[:100])
 
     try:
+        init_roles(from_stage)
+    except ConfigError as e:
+        log.error("Configuration error: %s", e)
+        sys.exit(1)
+
+    try:
         repo = Repo(PROJECT_ROOT)
     except InvalidGitRepositoryError:
         log.error("Not a git repository: %s", PROJECT_ROOT)
@@ -546,21 +573,22 @@ def run(task: str, from_stage: int = 1) -> None:
     stage1_output = ""
     if from_stage <= 1:
         setup_brand_assets()
-        stage1_output, stage1_written = stage_1_claude_code(task)
-        git_commit(repo, "feat(claude): initial implementation", stage1_written)
+        stage1_output, stage1_written = stage_1_implement(task)
+        git_commit(repo, "feat(implementation): initial implementation", stage1_written)
 
     if from_stage <= 2:
-        stage_2_gpt_review()
+        stage_2_quality_review()
 
     if from_stage <= 3:
-        stage_3_gemini_validate()
+        stage_3_security_audit()
 
     if from_stage <= 2 or from_stage == 3:
-        git_commit(repo, f"review: {GPT_MODEL} and {GEMINI_MODEL} feedback", [PROJECT_ROOT / "reviews"])
+        git_commit(repo, f"review: {ROLE_CONFIG['quality'].model} and "
+                         f"{ROLE_CONFIG['security'].model} feedback", [PROJECT_ROOT / "reviews"])
 
     if from_stage <= 4:
-        stage4_written = stage_4_claude_final(stage1_output)
-        git_commit(repo, "review(claude): final synthesis", [
+        stage4_written = stage_4_synthesize(stage1_output)
+        git_commit(repo, "review(synthesis): final synthesis", [
             PROJECT_ROOT / "reviews" / "final-review.md",
             *stage4_written,
         ])

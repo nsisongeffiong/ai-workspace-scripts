@@ -235,7 +235,9 @@ case "$LANG" in
 PYEOF
     cat > .env << 'ENVEOF'
 # Project-local .env -- overrides shared .env
-# CLAUDE_MODEL=claude-opus-4-6
+# Override a role for this project only (set PROVIDER and MODEL together):
+# IMPLEMENTATION_PROVIDER=anthropic
+# IMPLEMENTATION_MODEL=claude-opus-5
 # LOG_LEVEL=DEBUG
 ENVEOF
     chmod 600 .env
@@ -399,8 +401,13 @@ SUBMODEOF
   esac
 
   # ── Prepend {brand_context} placeholder to local stage prompt overrides ──
-  for prompt in claude_coder gpt_reviewer gemini_validator claude_final; do
+  # Role-named prompts; falls back to the provider-era shared name if the
+  # workspace has not been updated yet.
+  for pair in implementation:claude_coder quality:gpt_reviewer \
+              security:gemini_validator synthesis:claude_final; do
+    prompt="${pair%%:*}"; legacy="${pair##*:}"
     SHARED_PROMPT="$HOME/ai-workspace/.shared/prompts/${prompt}.md"
+    [[ -f "$SHARED_PROMPT" ]] || SHARED_PROMPT="$HOME/ai-workspace/.shared/prompts/${legacy}.md"
     LOCAL_PROMPT="$PROJECT_DIR/prompts/${prompt}.md"
     if [[ -f "$SHARED_PROMPT" ]] && [[ ! -f "$LOCAL_PROMPT" ]]; then
       cat > "$LOCAL_PROMPT" << PROMPTEOF
