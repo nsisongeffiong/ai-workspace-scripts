@@ -4,6 +4,19 @@ All notable changes to ai-workspace-scripts are recorded here.
 
 ---
 
+## [September 2026] — Task scope allowlist
+
+### Pipeline
+- A `SCOPE:` line in the task lists the files a run may write. The allowlist is checked where model-supplied paths are resolved, so it covers Stages 1 and 4. Entries are normalised (`./a.go` matches `a.go`) and entries outside the project are ignored with a warning. No `SCOPE:` line means no restriction.
+
+### Fix
+- The `src/generated.py` fallback no longer fires when file blocks were found but refused as unsafe or out of scope, and the fallback path itself goes through the same safety and scope checks. Previously a response whose paths were all refused was written wholesale to `src/generated.py`.
+
+### Docs
+- README Requirements now list an API key per pipeline role, with the default provider for each.
+
+---
+
 ## [September 2026] — Model-agnostic roles
 
 ### Pipeline

@@ -19,7 +19,7 @@ Resume from a specific stage (skips earlier stages):
   python scripts/run.py --from-stage 3 "task description"
   python scripts/run.py --from-stage 4 "task description"
 """
-import os, sys, logging, time, re
+import os, sys, logging, time, re, posixpath
 from pathlib import Path
 
 PROJECT_ROOT = Path(os.getenv("PROJECT_ROOT", Path.cwd())).resolve()
@@ -215,8 +215,49 @@ def read_src() -> str:
 _BLOCKED_TARGETS = {".git", ".env", ".env.local", ".env.production"}
 
 
+# -- Task scope allowlist -----------------------------------------------------
+#
+# A stage may write files the task never asked for.
+# A task can declare which files may be written with a line such as:
+#
+#   SCOPE: src/api/client.ts, src/api/types.ts
+#
+# The allowlist is enforced where model-supplied paths are resolved, so it
+# covers Stages 1 and 4. No SCOPE line means no restriction.
+
+_ALLOWED_PATHS = None
+
+
+def _normalise_rel(raw: str):
+    """Project-relative POSIX form of a path, or None if it leaves the project."""
+    rel = posixpath.normpath(raw.strip().replace("\\", "/"))
+    if rel.startswith("/") or rel == ".." or rel.startswith("../") or rel == ".":
+        return None
+    return rel
+
+
+def set_task_scope(task: str) -> None:
+    global _ALLOWED_PATHS
+    m = re.search(r"^\s*SCOPE:\s*(.+)$", task, re.MULTILINE)
+    if not m:
+        _ALLOWED_PATHS = None
+        log.info("  Scope: unrestricted")
+        return
+    allowed = set()
+    for entry in (x.strip() for x in m.group(1).split(",")):
+        if not entry:
+            continue
+        rel = _normalise_rel(entry)
+        if rel is None:
+            log.warning("  Scope: ignoring entry outside the project: %s", entry)
+            continue
+        allowed.add(rel)
+    _ALLOWED_PATHS = allowed
+    log.info("  Scope: %d writable -- %s", len(allowed), ", ".join(sorted(allowed)) or "(none)")
+
+
 def _safe_path(raw: str):
-    """Resolve a model-supplied path; return None if unsafe to write."""
+    """Resolve a model-supplied path; return None if unsafe or out of scope."""
     if Path(raw).is_absolute():
         log.warning("  Blocked absolute path from model output: %s", raw)
         return None
@@ -230,6 +271,11 @@ def _safe_path(raw: str):
         if part in _BLOCKED_TARGETS:
             log.warning("  Blocked sensitive target from model output: %s", raw)
             return None
+    if _ALLOWED_PATHS is not None:
+        key = resolved.relative_to(PROJECT_ROOT.resolve()).as_posix()
+        if key not in _ALLOWED_PATHS:
+            log.warning("  REFUSED out-of-scope write: %s", key)
+            return None
     return resolved
 
 
@@ -242,13 +288,16 @@ def write_file(path: Path, content: str) -> None:
 def extract_code_blocks(text: str) -> list:
     """Parse labelled code blocks, validate paths, and write files to disk.
 
-    Falls back to src/generated.py if no labelled filepath is found.
+    Falls back to src/generated.py only if no labelled file block is found at
+    all. Blocks that were found but refused (unsafe or out of scope) never
+    trigger the fallback, and the fallback path passes the same checks.
     Returns the list of Path objects actually written.
     """
     LANGS = r"tsx?|jsx?|typescript|javascript|css|scss|html|python|go|json|yaml|sh|bash|mjs|cjs"
     EXT   = r"tsx?|jsx?|css|scss|html|py|go|json|yaml|sh|md|mjs|cjs|toml|txt|env"
 
     written = []
+    matched = False
 
     # Pattern 1: path on the fence line  e.g. ```tsx src/app/page.tsx
     pattern1 = re.compile(
@@ -256,27 +305,32 @@ def extract_code_blocks(text: str) -> list:
         re.DOTALL
     )
     for m in pattern1.finditer(text):
+        matched = True
         path = _safe_path(m.group(1))
         if path:
             write_file(path, m.group(2))
             written.append(path)
 
     # Pattern 2: path as first-line comment  e.g. ```tsx\n// src/app/page.tsx
-    if not written:
+    if not matched:
         pattern2 = re.compile(
             rf"```(?:{LANGS})\n(?://\s*|#\s*)?([\w./\-]+\.(?:{EXT}))\n(.*?)```",
             re.DOTALL
         )
         for m in pattern2.finditer(text):
+            matched = True
             path = _safe_path(m.group(1))
             if path:
                 write_file(path, m.group(2))
                 written.append(path)
 
-    if not written:
-        fallback = PROJECT_ROOT / "src" / "generated.py"
-        write_file(fallback, text)
-        written.append(fallback)
+    if not matched:
+        fallback = _safe_path("src/generated.py")
+        if fallback:
+            write_file(fallback, text)
+            written.append(fallback)
+    elif not written:
+        log.warning("  No files written: every file block was refused")
 
     return written
 
@@ -569,6 +623,8 @@ def run(task: str, from_stage: int = 1) -> None:
         branch = f"feature/{int(time.time())}"
         repo.git.checkout("-b", branch)
         log.info("Branch:  %s", branch)
+
+    set_task_scope(task)
 
     stage1_output = ""
     if from_stage <= 1:

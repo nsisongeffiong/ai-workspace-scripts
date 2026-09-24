@@ -429,5 +429,62 @@ class TestPromptLookup(unittest.TestCase):
             self.o.load_prompt("quality")
 
 
+class ProjectTestCase(unittest.TestCase):
+    """A temporary project root, with scope reset around each test."""
+
+    def setUp(self):
+        import tempfile
+        import orchestrate
+        self.o = orchestrate
+        self.root = Path(tempfile.mkdtemp()).resolve()
+        patch = mock.patch.object(orchestrate, "PROJECT_ROOT", self.root)
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.addCleanup(lambda: setattr(orchestrate, "_ALLOWED_PATHS", None))
+        orchestrate._ALLOWED_PATHS = None
+
+    def put(self, rel, text="x"):
+        f = self.root / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(text)
+        return f
+
+
+class TestScope(ProjectTestCase):
+    def test_no_scope_line_is_unrestricted(self):
+        self.o.set_task_scope("Build the thing")
+        self.assertIsNone(self.o._ALLOWED_PATHS)
+        self.assertIsNotNone(self.o._safe_path("anything/at/all.go"))
+
+    def test_scope_normalised_and_enforced(self):
+        self.o.set_task_scope("Fix it\nSCOPE: ./src/api/client.ts, src/api/types.ts, ../escape.ts, /abs.ts\n")
+        self.assertEqual(self.o._ALLOWED_PATHS, {"src/api/client.ts", "src/api/types.ts"})
+        self.assertIsNotNone(self.o._safe_path("src/api/client.ts"))
+        self.assertIsNotNone(self.o._safe_path("./src//api/types.ts"))
+        self.assertIsNone(self.o._safe_path("src/api/other.ts"))
+
+    def test_refused_blocks_do_not_fall_back_to_generated(self):
+        self.o.set_task_scope("SCOPE: src/api/client.ts")
+        text = "```ts src/api/client.ts\nexport const a = 1\n```\n```ts other/x.ts\nexport const x = 1\n```"
+        written = self.o.extract_code_blocks(text)
+        self.assertEqual([w.relative_to(self.root).as_posix() for w in written], ["src/api/client.ts"])
+        self.assertFalse((self.root / "other" / "x.ts").exists())
+        self.assertFalse((self.root / "src" / "generated.py").exists())
+
+    def test_all_refused_writes_nothing(self):
+        self.o.set_task_scope("SCOPE: src/api/client.ts")
+        self.assertEqual(self.o.extract_code_blocks("```ts other/x.ts\nexport const x = 1\n```"), [])
+        self.assertFalse((self.root / "src" / "generated.py").exists())
+
+    def test_fallback_respects_scope(self):
+        self.o.set_task_scope("SCOPE: src/api/client.ts")
+        self.assertEqual(self.o.extract_code_blocks("no code blocks here"), [])
+        self.assertFalse((self.root / "src" / "generated.py").exists())
+
+    def test_fallback_unchanged_without_scope(self):
+        written = self.o.extract_code_blocks("no code blocks here")
+        self.assertEqual([w.relative_to(self.root).as_posix() for w in written], ["src/generated.py"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -23,9 +23,13 @@ The pipeline writes all files exactly where the AI specifies, and runs `npm inst
 
 ## Requirements
 
-- An **Anthropic** API key — [console.anthropic.com](https://console.anthropic.com)
-- An **OpenAI** API key — [platform.openai.com](https://platform.openai.com)
-- A **Google** API key — [aistudio.google.com](https://aistudio.google.com)
+An API key for the provider behind each pipeline role:
+
+- **Implementation and synthesis** (Stages 1 and 4) — Anthropic by default: [console.anthropic.com](https://console.anthropic.com)
+- **Quality review** (Stage 2) — OpenAI by default: [platform.openai.com](https://platform.openai.com)
+- **Security audit** (Stage 3) — Google by default: [aistudio.google.com](https://aistudio.google.com)
+
+Each role needs a different model. To use another provider for any role, see [Change a role's model](#change-a-roles-model).
 
 ---
 
@@ -167,6 +171,17 @@ git checkout main
 git merge feature/<branch-name>
 git push
 ```
+
+### Limit which files a run writes
+
+To limit which files a run may write, add a `SCOPE:` line to the task:
+
+```bash
+python scripts/run.py "Add retry logic to the payment client.
+SCOPE: src/payments/client.ts, src/payments/client.test.ts"
+```
+
+Writes to any other path from Stages 1 and 4 are refused and logged. Without a `SCOPE:` line, nothing is restricted.
 
 ---
 
